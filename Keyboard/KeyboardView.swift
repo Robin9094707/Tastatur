@@ -60,6 +60,10 @@ struct KeyboardRootView: View {
             TranslatePanel(state: state).transition(.move(edge: .bottom).combined(with: .opacity))
         case .commands:
             CommandsPanel(state: state).transition(.move(edge: .bottom).combined(with: .opacity))
+        case .discord:
+            DiscordPanel(state: state).transition(.move(edge: .bottom).combined(with: .opacity))
+        case .check:
+            CheckPanel(state: state).transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
 
@@ -93,6 +97,18 @@ struct Toolbar: View {
                 }
                 .buttonStyle(.plain)
                 suggestionBar
+                if !bar.issues.isEmpty {
+                    Button { state.toggle(.check) } label: {
+                        ZStack {
+                            Circle().fill(Color.orange.gradient)
+                            Text("\(bar.issues.count)").font(.system(size: 14, weight: .bold, design: .rounded)).foregroundStyle(.white)
+                        }
+                        .frame(width: 30, height: 30)
+                        .frame(width: 34, height: 38)
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.scale.combined(with: .opacity))
+                }
                 circleButton("wand.and.stars", active: false) { state.toggle(.ai) }
             } else if state.panel == .tools {
                 circleButton("xmark", active: true) { state.toggle(.tools) }
@@ -140,6 +156,8 @@ struct Toolbar: View {
         case .cursor: return "Cursor & Text"
         case .translate: return "Übersetzen"
         case .commands: return "Befehle"
+        case .discord: return "Discord"
+        case .check: return bar.issues.isEmpty ? "Textprüfung" : "Textprüfung · \(bar.issues.count) Hinweis\(bar.issues.count == 1 ? "" : "e")"
         default: return ""
         }
     }
@@ -166,10 +184,16 @@ struct Toolbar: View {
             } else if bar.suggestions.isEmpty && bar.phrases.isEmpty {
                 HStack {
                     Spacer()
-                    if let profile = state.store.activeProfile {
-                        Text("\(profile.emoji) \(profile.name)").font(.caption).foregroundStyle(.secondary)
-                    } else if bar.thinking {
+                    if bar.thinking {
                         Text("KI denkt mit …").font(.caption).foregroundStyle(.secondary)
+                    } else if bar.checking {
+                        Text("Prüfe Text …").font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        let profile = state.store.activeProfile.map { "\($0.emoji) \($0.name)" }
+                        let app = state.store.activeApp.map { "\($0.emoji) \($0.name)" }
+                        if let label = [profile, app].compactMap({ $0 }).joined(separator: " · ").nilIfEmpty {
+                            Text(label).font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                     Spacer()
                 }
@@ -202,6 +226,7 @@ struct Toolbar: View {
         }
         .animation(.easeOut(duration: 0.18), value: bar.phrases.map(\.text))
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: bar.liveFix)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: bar.issues.count)
         .padding(.trailing, state.store.aiSuggestMode != "off" && bar.liveFix == nil ? 36 : 0)
         .frame(height: 38)
         .frame(maxWidth: .infinity)
@@ -449,4 +474,8 @@ struct ToolStrip: View {
         }
         .buttonStyle(.plain)
     }
+}
+
+extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

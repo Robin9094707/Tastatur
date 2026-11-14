@@ -111,6 +111,20 @@ final class KeyboardViewController: UIInputViewController {
         // bremst das die untere Reihe – deshalb abschalten, wie bei der Apple-Tastatur.
         disableTouchDelays()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.disableTouchDelays() }
+        state?.setHostApp(bundleID: hostBundleID())
+    }
+
+    /// Versucht, die App zu erkennen, in der getippt wird. Apple hat das ab iOS 26.4 gesperrt –
+    /// dort wird es gar nicht erst versucht (manuelle Auswahl in der Tastatur).
+    private func hostBundleID() -> String? {
+        if #available(iOS 26.4, *) { return nil }
+        let sel = NSSelectorFromString("_hostBundleID")
+        let candidates: [NSObject] = [self, parent].compactMap { $0 }
+        for obj in candidates where obj.responds(to: sel) {
+            guard let value = obj.perform(sel)?.takeUnretainedValue() as? String else { continue }
+            if !value.isEmpty, value != "<null>" { return value }
+        }
+        return nil
     }
 
     private func disableTouchDelays() {

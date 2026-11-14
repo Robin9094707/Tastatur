@@ -18,6 +18,8 @@ enum Panel: Equatable {
     case cursor
     case translate
     case commands
+    case discord
+    case check
 }
 
 struct Suggestion: Identifiable, Equatable {
@@ -35,6 +37,9 @@ final class BarModel: ObservableObject {
     @Published var phrases: [Suggestion] = []
     @Published var thinking = false
     @Published var liveFix: KeyboardState.LiveFix?
+    /// Hinweise der Kontextprüfung (orange Markierung in der Leiste).
+    @Published var issues: [OpenAIClient.CheckIssue] = []
+    @Published var checking = false
 }
 
 /// Zustand, den nur das UIKit-Tastenfeld braucht.
@@ -118,6 +123,10 @@ final class KeyboardState: ObservableObject {
     @Published var aiChangeCount = 0
     @Published var aiError: String?
     @Published var aiTitle = ""
+    /// Ergebnis enthält App-Formatierung (z. B. Discord-Markdown) – nicht bereinigen.
+    var aiKeepMarkdown = false
+    /// Ergebnis nach Fertigstellung automatisch kopieren.
+    var aiAutoCopy = false
     @Published var composeMode = false
     @Published var composeTarget: ComposeTarget = .ai
     @Published var settingsPage: SettingsPage = .main
@@ -128,6 +137,7 @@ final class KeyboardState: ObservableObject {
     enum ComposeTarget: Equatable {
         case ai, refine, translate, calc, mcCommand, apiKey, baseURL, chatModel, personalContext, writingStyle
         case macroShortcut, macroText, profileName, profileContext(UUID), actionTitle, actionPrompt
+        case aiBehavior, learnedProfile, actionEdit(UUID), discordAnnounce
 
         var placeholder: String {
             switch self {
@@ -147,6 +157,10 @@ final class KeyboardState: ObservableObject {
             case .profileContext: return "Kontext für dieses Profil"
             case .actionTitle: return "Name der KI-Aktion"
             case .actionPrompt: return "Anweisung an die KI"
+            case .aiBehavior: return "Wie soll sich die KI verhalten? z. B. „Duze immer, kurz & locker“"
+            case .learnedProfile: return "Was die KI über dich weiß …"
+            case .actionEdit: return "Neue Anweisung für die Aktion"
+            case .discordAnnounce: return "Worum geht die Ankündigung?"
             }
         }
 
@@ -163,11 +177,14 @@ final class KeyboardState: ObservableObject {
             case .personalContext, .writingStyle, .profileContext: return "person.text.rectangle"
             case .macroShortcut, .macroText: return "text.badge.star"
             case .profileName: return "person.2"
-            case .actionTitle, .actionPrompt: return "wand.and.stars"
+            case .actionTitle, .actionPrompt, .actionEdit: return "wand.and.stars"
+            case .aiBehavior: return "slider.horizontal.below.square.and.square.filled"
+            case .learnedProfile: return "brain.head.profile"
+            case .discordAnnounce: return "megaphone"
             }
         }
 
-        var isSetting: Bool { self != .ai && self != .refine && self != .translate && self != .calc && self != .mcCommand }
+        var isSetting: Bool { self != .ai && self != .refine && self != .translate && self != .calc && self != .mcCommand && self != .discordAnnounce }
     }
 
     enum SettingsPage: Equatable { case main, ai, context, design, typing, macros, actions, toolbar }
@@ -189,8 +206,9 @@ final class KeyboardState: ObservableObject {
     private var refreshWork: DispatchWorkItem?
     private var deleteTimer: Timer?
     private var deleteCount = 0
-    private let impact = UIImpactFeedbackGenerator(style: .light)
-    private let impactMedium = UIImpactFeedbackGenerator(style: .medium)
+    private var impact = UIImpactFeedbackGenerator(style: .light)
+    private var impactMedium = UIImpactFeedbackGenerator(style: .medium)
+    private var hapticStyleInUse = "light"
     private let selection = UISelectionFeedbackGenerator()
 
     var onHeightChange: ((CGFloat) -> Void)?
@@ -299,17 +317,51 @@ final class KeyboardState: ObservableObject {
     /// Sofortiges Feedback beim Herunterdrücken einer Taste.
     func keyDownFeedback(special: Bool) {
         if store.keySound { AudioServicesPlaySystemSound(special ? 1156 : 1104) }
-        if store.haptics, hasFullAccess {
-            impact.impactOccurred(intensity: special ? 0.8 : 0.6)
+        if store.haptics, hasFullAccess, store.hapticStrength > 0.01 {
+            ensureHapticStyle()
+            let base = store.hapticStrength
+            impact.impactOccurred(intensity: CGFloat(min(1, special ? base + 0.15 : base)))
             impact.prepare()
         }
     }
 
     func feedback(_ style: UIImpactFeedbackGenerator.FeedbackStyle = .light) {
         if store.keySound { AudioServicesPlaySystemSound(1104) }
-        if store.haptics, hasFullAccess {
-            if style == .medium || style == .heavy { impactMedium.impactOccurred() } else { impact.impactOccurred() }
+        if store.haptics, hasFullAccess, store.hapticStrength > 0.01 {
+            ensureHapticStyle()
+            let base = store.hapticStrength
+            if style == .medium || style == .heavy {
+                impactMedium.impactOccurred(intensity: CGFloat(min(1, base + 0.3)))
+            } else {
+                impact.impactOccurred(intensity: CGFloat(base))
+            }
         }
+    }
+
+    /// Haptik-Art geändert → Generator neu anlegen (nur dann, kostet sonst nichts).
+    private func ensureHapticStyle() {
+        let st = store.hapticStyle
+        guard st != hapticStyleInUse else { return }
+        hapticStyleInUse = st
+        let style: UIImpactFeedbackGenerator.FeedbackStyle
+        switch st {
+        case "soft": style = .soft
+        case "medium": style = .medium
+        case "rigid": style = .rigid
+        case "heavy": style = .heavy
+        default: style = .light
+        }
+        impact = UIImpactFeedbackGenerator(style: style)
+        impactMedium = UIImpactFeedbackGenerator(style: style == .light || style == .soft ? .medium : .heavy)
+        impact.prepare()
+    }
+
+    /// Kurzer Test beim Einstellen der Haptik.
+    func hapticPreview() {
+        guard hasFullAccess else { showToast("Haptik braucht „Vollen Zugriff“."); return }
+        ensureHapticStyle()
+        impact.impactOccurred(intensity: CGFloat(max(0.05, store.hapticStrength)))
+        impact.prepare()
     }
 
     func showToast(_ text: String) {
@@ -522,6 +574,11 @@ final class KeyboardState: ObservableObject {
     private func afterCommit() {
         wordsSincePrediction += 1
         if !liveEditing {
+            let end = before.last.map { ".!?\n".contains($0) } ?? false
+            scheduleContextCheck(sentenceEnd: end)
+            if end { collectSample() }
+        }
+        if !liveEditing {
             wordsSinceCheck += 1
             let last = before.last
             if wordsSinceCheck >= 8 || (last != nil && ".!?\n".contains(last!)) && wordsSinceCheck >= 1 {
@@ -648,6 +705,7 @@ final class KeyboardState: ObservableObject {
     // MARK: - Vorschläge (entkoppelt vom Tippen)
 
     func scheduleRefresh() {
+        if !liveEditing, !bar.issues.isEmpty { pruneIssues() }
         if !liveEditing {
             liveCheckWork?.cancel()
             if liveCheckPending { scheduleLiveCheck() }
@@ -988,6 +1046,8 @@ final class KeyboardState: ObservableObject {
         aiResult = ""
         aiOriginal = ""
         aiError = nil
+        aiKeepMarkdown = store.activeApp?.markdown == true
+        aiAutoCopy = false
         aiBusy = true
         aiStatus = "Bereite vor …"
         aiShowDiff = showDiff
@@ -1031,6 +1091,8 @@ final class KeyboardState: ObservableObject {
         aiTitle = title
         aiResult = ""
         aiOriginal = original
+        aiKeepMarkdown = store.activeApp?.markdown == true
+        aiAutoCopy = false
         aiError = nil
         aiBusy = true
         aiStatus = "KI schreibt …"
@@ -1053,7 +1115,7 @@ final class KeyboardState: ObservableObject {
             let result = try await work { [weak self] partial in
                 DispatchQueue.main.async {
                     guard let self, self.aiBusy else { return }
-                    self.aiResult = OpenAIClient.cleanup(partial)
+                    self.aiResult = OpenAIClient.cleanup(partial, keepMarkdown: self.aiKeepMarkdown)
                 }
             }
             guard !Task.isCancelled else { return }
@@ -1061,6 +1123,11 @@ final class KeyboardState: ObservableObject {
             aiBusy = false
             feedback(.medium)
             computeDiff()
+            if aiAutoCopy, hasFullAccess, !result.isEmpty {
+                UIPasteboard.general.string = result
+                lastChangeCount = UIPasteboard.general.changeCount
+                showToast("Fertig & kopiert ✓")
+            }
         } catch {
             guard !Task.isCancelled else { return }
             aiError = error.localizedDescription
@@ -1162,6 +1229,10 @@ final class KeyboardState: ObservableObject {
             refine(text)
             return
         }
+        if target == .discordAnnounce {
+            discordAnnouncement(description: text)
+            return
+        }
         if target == .mcCommand {
             let edition = store.commandEdition
             runAI(title: "Minecraft-Befehl (\(edition))", original: "", target: .none, showDiff: false) { [client = self.client] partial in
@@ -1237,7 +1308,17 @@ final class KeyboardState: ObservableObject {
             store.actions.append(AIAction(title: pendingMacroShortcut, symbol: "wand.and.stars", prompt: text))
             showToast("KI-Aktion „\(pendingMacroShortcut)“ angelegt ✓")
             pendingMacroShortcut = ""
-        case .ai, .refine, .translate, .calc, .mcCommand:
+        case .aiBehavior:
+            store.aiBehavior = text
+            showToast(text.isEmpty ? "Eigene KI-Regeln entfernt" : "KI-Regeln gespeichert ✓")
+        case .learnedProfile:
+            store.learnedProfile = text
+            showToast(text.isEmpty ? "Gelerntes Profil gelöscht" : "Profil gespeichert ✓")
+        case .actionEdit(let id):
+            guard !text.isEmpty, let i = store.actions.firstIndex(where: { $0.id == id }) else { return }
+            store.actions[i].prompt = text
+            showToast("Aktion „\(store.actions[i].title)“ geändert ✓")
+        case .ai, .refine, .translate, .calc, .mcCommand, .discordAnnounce:
             break
         }
     }
@@ -1286,18 +1367,43 @@ final class KeyboardState: ObservableObject {
         }
     }
 
+    /// Löscht den kompletten Text im Feld und setzt den neuen ein.
+    /// Klappt das Löschen in Blöcken nicht, wird so lange „Löschen“ gedrückt, bis alles weg ist.
     @MainActor
     private func replaceAll(with text: String, expectedLength: Int) async {
         await moveToEnd()
+        let limit = max(expectedLength * 2 + 500, 20_000)
         var deleted = 0
-        let limit = expectedLength + 20
-        while deleted < limit {
+        var stalls = 0
+        var rounds = 0
+        while deleted < limit, rounds < 6000 {
+            rounds += 1
             let b = before
-            if b.isEmpty { break }
-            let n = min(b.count, limit - deleted)
+            if b.isEmpty {
+                // iOS liefert manchmal kurz einen leeren Ausschnitt – nachprüfen
+                try? await Task.sleep(nanoseconds: 40_000_000)
+                if !before.isEmpty { continue }
+                if !after.isEmpty { await moveToEnd(); continue }
+                // Letzte Sicherheit: ein paar einzelne Löschschläge, falls doch noch Text da ist
+                proxy?.deleteBackward()
+                try? await Task.sleep(nanoseconds: 30_000_000)
+                if before.isEmpty && after.isEmpty { break }
+                continue
+            }
+            let n = b.count
             for _ in 0..<n { proxy?.deleteBackward() }
             deleted += n
             await waitForContextChange(from: b)
+            if before == b {
+                // Feld reagiert nicht auf Blocklöschen → Taste für Taste
+                stalls += 1
+                proxy?.deleteBackward()
+                deleted += 1
+                try? await Task.sleep(nanoseconds: 15_000_000)
+                if stalls > 400 { break }
+            } else {
+                stalls = 0
+            }
         }
         proxy?.insertText(text)
     }
@@ -1793,6 +1899,353 @@ final class KeyboardState: ObservableObject {
         afterCommit()
     }
 
+    // MARK: - Ziel-App
+
+    /// Setzt die erkannte App (falls iOS sie verrät).
+    func setHostApp(bundleID: String?) {
+        let id = bundleID.flatMap { AppProfiles.detect(bundleID: $0)?.id } ?? ""
+        if store.detectedApp != id { store.detectedApp = id }
+    }
+
+    func setAppProfile(_ id: String) {
+        store.appProfile = id
+        feedback()
+        let name = store.activeApp.map { "\($0.emoji) \($0.name)" } ?? (id == "auto" ? "Automatisch" : "Keine App")
+        showToast("Schreibe für: \(name)")
+    }
+
+    // MARK: - Kontextprüfung
+
+    private var contextCheckWork: DispatchWorkItem?
+    private var contextCheckTask: Task<Void, Never>?
+    private var wordsSinceContextCheck = 0
+    private var lastContextChecked = ""
+    private var dismissedIssues = Set<String>()
+    /// Text, der zuletzt geprüft wurde (für die Markierungen im Prüf-Panel).
+    @Published var checkedText = ""
+
+    private var contextCheckReady: Bool {
+        store.contextCheck != "off" && hasFullAccess && store.hasAPIKey && panel == .none && !composeMode && shouldAutocorrect && !isCommandLine
+    }
+
+    /// Nach jedem Wort: kurz warten und dann im Hintergrund prüfen.
+    private func scheduleContextCheck(sentenceEnd: Bool) {
+        guard contextCheckReady else { return }
+        wordsSinceContextCheck += 1
+        let intense = store.contextCheck == "intense"
+        let needed = intense ? 3 : 6
+        guard sentenceEnd || wordsSinceContextCheck >= needed else { return }
+        contextCheckWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.runContextCheck(manual: false) }
+        contextCheckWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + (intense ? 1.5 : 2.6), execute: work)
+    }
+
+    /// Prüft den aktuellen Abschnitt. `manual`: über den Knopf „Prüfen“ (gründlich, öffnet das Panel).
+    func runContextCheck(manual: Bool) {
+        if manual {
+            guard requireAI() else { return }
+        } else {
+            guard contextCheckReady else { return }
+        }
+        let b = before, a = after
+        let text = String(b.suffix(manual ? 2500 : 700)) + String(a.prefix(manual ? 800 : 200))
+        guard text.trimmingCharacters(in: .whitespacesAndNewlines).wordCount >= (manual ? 1 : 3) else {
+            if manual { showToast("Noch kein Text zum Prüfen.") }
+            return
+        }
+        if !manual, text == lastContextChecked { return }
+        lastContextChecked = text
+        wordsSinceContextCheck = 0
+        let surrounding = String(b.dropLast(min(b.count, 700)).suffix(2500))
+        let intense = manual || store.contextCheck == "intense"
+        contextCheckTask?.cancel()
+        bar.checking = true
+        if manual {
+            checkedText = text
+            bar.issues = []
+            panel = .check
+        }
+        contextCheckTask = Task { [weak self] in
+            guard let self else { return }
+            let result: [OpenAIClient.CheckIssue]
+            do {
+                result = try await self.client.contextCheck(text: text, surrounding: surrounding.isEmpty ? nil : surrounding, intense: intense)
+            } catch {
+                await MainActor.run {
+                    self.bar.checking = false
+                    if manual { self.showToast(error.localizedDescription) }
+                }
+                return
+            }
+            await MainActor.run {
+                guard !Task.isCancelled else { return }
+                self.bar.checking = false
+                let current = self.before + self.after
+                let fresh = result.filter { !self.dismissedIssues.contains($0.original + "→" + $0.suggestion) && current.contains($0.original) }
+                self.checkedText = text
+                let hadIssues = !self.bar.issues.isEmpty
+                self.bar.issues = fresh
+                if !fresh.isEmpty, !hadIssues, !manual, self.store.haptics, self.hasFullAccess { self.selection.selectionChanged() }
+                if manual && fresh.isEmpty { self.showToast("Alles gut – nichts gefunden ✓") }
+            }
+        }
+    }
+
+    /// Entfernt Hinweise, deren Textstelle nicht mehr existiert.
+    private func pruneIssues() {
+        guard !bar.issues.isEmpty else { return }
+        let current = before + after
+        let kept = bar.issues.filter { current.contains($0.original) }
+        if kept.count != bar.issues.count { bar.issues = kept }
+    }
+
+    func applyIssue(_ issue: OpenAIClient.CheckIssue) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.liveEditing = true
+            let ok = await self.replacePhrase(issue.original, with: issue.suggestion)
+            self.liveEditing = false
+            self.bar.issues.removeAll { $0.id == issue.id }
+            if ok {
+                self.feedback(.medium)
+                self.store.incrementStat("corrections")
+                for w in issue.suggestion.split(separator: " ") where w.count > 2 { self.engine.learn(word: String(w), previous: nil) }
+            } else {
+                self.showToast("Stelle nicht mehr gefunden.")
+            }
+            if self.bar.issues.isEmpty, self.panel == .check { self.panel = .none }
+        }
+    }
+
+    func applyAllIssues() {
+        let list = bar.issues
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.liveEditing = true
+            var count = 0
+            for issue in list {
+                if await self.replacePhrase(issue.original, with: issue.suggestion) { count += 1 }
+            }
+            self.liveEditing = false
+            self.bar.issues = []
+            self.feedback(.medium)
+            self.showToast("\(count) Stelle\(count == 1 ? "" : "n") korrigiert ✓")
+            if self.panel == .check { self.panel = .none }
+        }
+    }
+
+    func dismissIssue(_ issue: OpenAIClient.CheckIssue) {
+        dismissedIssues.insert(issue.original + "→" + issue.suggestion)
+        bar.issues.removeAll { $0.id == issue.id }
+        feedback()
+        if bar.issues.isEmpty, panel == .check { panel = .none }
+    }
+
+    /// Ersetzt eine Textstelle vor oder hinter dem Cursor, ohne die Cursorposition zu verlieren.
+    @MainActor
+    private func replacePhrase(_ wrong: String, with right: String) async -> Bool {
+        let b = before
+        if let r = b.range(of: wrong, options: .backwards) {
+            let tailUTF16 = b[r.upperBound...].utf16.count
+            if tailUTF16 > 0 {
+                proxy?.adjustTextPosition(byCharacterOffset: -tailUTF16)
+                await waitForContextChange(from: b)
+                guard before.hasSuffix(wrong) else {
+                    proxy?.adjustTextPosition(byCharacterOffset: tailUTF16)
+                    return false
+                }
+            }
+            deleteChars(wrong.count)
+            proxy?.insertText(right)
+            if tailUTF16 > 0 {
+                proxy?.adjustTextPosition(byCharacterOffset: tailUTF16)
+                try? await Task.sleep(nanoseconds: 25_000_000)
+            }
+            return true
+        }
+        let a = after
+        if let r = a.range(of: wrong) {
+            let headUTF16 = a[..<r.upperBound].utf16.count
+            let old = proxy?.documentContextBeforeInput
+            proxy?.adjustTextPosition(byCharacterOffset: headUTF16)
+            await waitForContextChange(from: old)
+            guard before.hasSuffix(wrong) else {
+                proxy?.adjustTextPosition(byCharacterOffset: -headUTF16)
+                return false
+            }
+            deleteChars(wrong.count)
+            proxy?.insertText(right)
+            let back = headUTF16 - wrong.utf16.count + right.utf16.count
+            proxy?.adjustTextPosition(byCharacterOffset: -back)
+            try? await Task.sleep(nanoseconds: 25_000_000)
+            return true
+        }
+        return false
+    }
+
+    // MARK: - Kennenlernen (gelerntes Profil)
+
+    private static var samplesURL: URL { SharedStore.containerURL.appendingPathComponent("writing-samples.json") }
+    private var learning = false
+
+    /// Merkt sich fertige Sätze (lokal) und lässt die KI daraus ab und zu ein Profil lernen.
+    private func collectSample() {
+        guard store.learnProfile, shouldAutocorrect, !isCommandLine, !composeMode else { return }
+        var b = before
+        while let l = b.last, l == " " || l == "\n" { b.removeLast() }
+        guard let last = b.last, ".!?".contains(last) || before.last == "\n" else { return }
+        let body = b.dropLast()
+        let start = body.lastIndex(where: { ".!?\n".contains($0) }).map { body.index(after: $0) } ?? body.startIndex
+        let sentence = String(b[start...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard sentence.wordCount >= 4, sentence.count < 600 else { return }
+        let url = Self.samplesURL
+        let defaults = store.defaults
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            var list = (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? []
+            if list.last == sentence { return }
+            list.append(sentence)
+            if list.count > 150 { list.removeFirst(list.count - 150) }
+            if let data = try? JSONEncoder().encode(list) { try? data.write(to: url, options: .atomic) }
+            let newCount = defaults.integer(forKey: "learn.newSamples") + 1
+            defaults.set(newCount, forKey: "learn.newSamples")
+            let lastRun = defaults.double(forKey: "learn.lastRun")
+            let interval: Double = SharedStore.shared.usesChatGPT ? 3600 : 6 * 3600
+            if newCount >= 20, Date().timeIntervalSince1970 - lastRun > interval {
+                DispatchQueue.main.async { self?.learnNow(silent: true) }
+            }
+        }
+    }
+
+    /// Lässt die KI jetzt aus den gesammelten Texten lernen.
+    func learnNow(silent: Bool = false) {
+        guard !learning else { return }
+        if silent {
+            guard store.learnProfile, hasFullAccess, store.hasAPIKey else { return }
+        } else {
+            guard requireAI() else { return }
+        }
+        let list = (try? Data(contentsOf: Self.samplesURL)).flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? []
+        guard list.count >= (silent ? 10 : 3) else {
+            if !silent { showToast("Schreib noch ein bisschen – dann lernt die KI dich kennen.") }
+            return
+        }
+        learning = true
+        if !silent { showToast("KI lernt dich kennen …") }
+        let existing = store.learnedProfile
+        Task { [weak self] in
+            guard let self else { return }
+            let result = try? await self.client.learnProfile(samples: list, existing: existing)
+            await MainActor.run {
+                self.learning = false
+                self.store.defaults.set(Date().timeIntervalSince1970, forKey: "learn.lastRun")
+                self.store.defaults.set(0, forKey: "learn.newSamples")
+                if let result, !result.isEmpty {
+                    self.store.learnedProfile = String(result.prefix(2500))
+                    if !silent { self.showToast("Profil aktualisiert ✓") }
+                } else if !silent {
+                    self.showToast("Lernen fehlgeschlagen – später nochmal.")
+                }
+            }
+        }
+    }
+
+    func forgetProfile() {
+        store.learnedProfile = ""
+        try? FileManager.default.removeItem(at: Self.samplesURL)
+        store.defaults.set(0, forKey: "learn.newSamples")
+        showToast("Gelerntes vergessen ✓")
+    }
+
+    // MARK: - Discord
+
+    /// Umschließt die Markierung (oder setzt die Zeichen und den Cursor dazwischen).
+    func discordWrap(_ left: String, _ right: String) {
+        feedback()
+        let sel = selected
+        if !sel.isEmpty {
+            proxy?.insertText(left + sel + right)
+        } else {
+            proxy?.insertText(left + right)
+            proxy?.adjustTextPosition(byCharacterOffset: -right.utf16.count)
+            panel = .none
+        }
+        scheduleRefresh()
+    }
+
+    /// Setzt ein Zeilen-Präfix (z. B. „# “) an den Anfang einer neuen Zeile.
+    func discordLine(_ prefix: String) {
+        feedback()
+        if let last = before.last, last != "\n" { proxy?.insertText("\n") }
+        let sel = selected
+        proxy?.insertText(prefix + sel)
+        if sel.isEmpty { panel = .none }
+        scheduleRefresh()
+    }
+
+    func discordInsert(_ text: String, copy: Bool = false) {
+        feedback()
+        if copy, hasFullAccess {
+            UIPasteboard.general.string = text
+            lastChangeCount = UIPasteboard.general.changeCount
+            showToast("Kopiert ✓")
+            return
+        }
+        if let last = before.last, !last.isWhitespace, !text.hasPrefix("\n") { proxy?.insertText(" ") }
+        proxy?.insertText(text)
+        scheduleRefresh()
+    }
+
+    var discordLanguageLabel: String {
+        switch store.discordLanguages {
+        case "en": return "🇬🇧"
+        case "both": return "🇩🇪+🇬🇧"
+        default: return "🇩🇪"
+        }
+    }
+
+    /// Ankündigung aus einer Beschreibung (Eingabeleiste).
+    func discordAnnouncement(description: String) {
+        let langs = store.discordLanguages, mention = store.discordMention
+        runAI(title: "Discord-Ankündigung \(discordLanguageLabel)", original: "", target: .none, showDiff: false) { [client = self.client] partial in
+            try await client.discordAnnouncement(source: description, isDescription: true, languages: langs, mention: mention, onPartial: partial)
+        }
+        aiKeepMarkdown = true
+        aiAutoCopy = store.discordAutoCopy
+    }
+
+    /// Ankündigung aus dem Text im Feld (oder der Markierung) – Ergebnis zum Ersetzen/Kopieren.
+    func discordAnnouncementFromField() {
+        guard requireAI() else { return }
+        let langs = store.discordLanguages, mention = store.discordMention
+        startAI(title: "Discord-Ankündigung \(discordLanguageLabel)", showDiff: false) { [weak self] in
+            guard let self else { return nil }
+            return await self.gatherSource(mode: .auto)
+        } work: { [client = self.client] text, _, partial in
+            try await client.discordAnnouncement(source: text, isDescription: false, languages: langs, mention: mention, onPartial: partial)
+        }
+        aiKeepMarkdown = true
+        aiAutoCopy = store.discordAutoCopy
+    }
+
+    /// Text im Feld mit Discord-Markdown formatieren.
+    func discordFormatField() {
+        guard requireAI() else { return }
+        let instruction = "Formatiere den Text als schön strukturierte Discord-Nachricht mit Discord-Markdown (Überschriften wo sinnvoll, **fett** für Wichtiges, Listen, passende Emojis). Inhalt und Sprache beibehalten, nichts erfinden.\n\n" + AppProfiles.discordRules
+        startAI(title: "Discord-Format", showDiff: false) { [weak self] in
+            guard let self else { return nil }
+            return await self.gatherSource(mode: .auto)
+        } work: { [client = self.client] text, _, partial in
+            let r = try await client.chat(messages: [
+                ChatMessage(role: "system", content: "Du formatierst Texte für Discord. Gib NUR die fertige Nachricht zurück, ohne Codeblock drumherum."),
+                ChatMessage(role: "user", content: "Aufgabe: \(instruction)\n\n<text>\n\(text)\n</text>"),
+            ], onPartial: partial)
+            return OpenAIClient.cleanup(r, keepMarkdown: true)
+        }
+        aiKeepMarkdown = true
+        aiAutoCopy = store.discordAutoCopy
+    }
+
     // MARK: - Werkzeuge der Schnellleiste
 
     func runTool(_ id: String) {
@@ -1803,6 +2256,8 @@ final class KeyboardState: ObservableObject {
         case "translateClip": translateClipboard()
         case "write": startCompose()
         case "commands": toggle(.commands)
+        case "discord": toggle(.discord)
+        case "check": runContextCheck(manual: true)
         case "clipboard": toggle(.clipboard)
         case "stickers": toggle(.stickers)
         case "emoji": toggle(.emoji)

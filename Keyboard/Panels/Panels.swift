@@ -12,12 +12,17 @@ struct AIPanel: View {
                 if !state.hasFullAccess || !store.hasAPIKey {
                     MissingSetupBanner(state: state)
                 }
+                AppPicker(state: state)
                 sourcePicker
+                let appActions = store.actions.filter { $0.enabled && !$0.apps.isEmpty && $0.fits(store.activeApp) }
+                if let app = store.activeApp, !appActions.isEmpty {
+                    section(title: "FÜR \(app.name.uppercased()) \(app.emoji)", highlight: true, appActions)
+                }
                 quickFormat
                 ForEach([ActionCategory.summary, .format, .edit, .tone, .translate, .custom]) { cat in
-                    let items = store.actions.filter { $0.enabled && $0.category == cat }
+                    let items = store.actions.filter { $0.enabled && $0.category == cat && $0.apps.isEmpty }
                     if !items.isEmpty {
-                        section(cat, items)
+                        section(title: cat.label.uppercased(), highlight: cat == .summary, items)
                     }
                 }
             }
@@ -85,9 +90,9 @@ struct AIPanel: View {
         .buttonStyle(.plain)
     }
 
-    private func section(_ cat: ActionCategory, _ items: [AIAction]) -> some View {
+    private func section(title: String, highlight: Bool, _ items: [AIAction]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(cat.label.uppercased())
+            Text(title)
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(.secondary)
                 .padding(.leading, 4)
@@ -99,15 +104,15 @@ struct AIPanel: View {
                                 HStack(spacing: 6) {
                                     Image(systemName: action.symbol)
                                         .font(.system(size: 14, weight: .semibold))
-                                        .foregroundStyle(cat == .summary ? Color.white : state.tint)
+                                        .foregroundStyle(highlight ? Color.white : state.tint)
                                     Text(action.title)
                                         .font(.subheadline.weight(.semibold))
-                                        .foregroundStyle(cat == .summary ? Color.white : Color.primary)
+                                        .foregroundStyle(highlight ? Color.white : Color.primary)
                                         .lineLimit(1)
                                 }
                                 .padding(.horizontal, 13)
                                 .frame(height: 40)
-                                .glass(cornerRadius: 14, tint: cat == .summary ? state.tint.opacity(0.85) : nil, interactive: true)
+                                .glass(cornerRadius: 14, tint: highlight ? state.tint.opacity(0.85) : nil, interactive: true)
                             }
                             .buttonStyle(.plain)
                         }
@@ -116,6 +121,38 @@ struct AIPanel: View {
                 }
             }
         }
+    }
+}
+
+/// Auswahl der Ziel-App (iOS verrät sie ab 26.4 nicht mehr automatisch).
+struct AppPicker: View {
+    @ObservedObject var state: KeyboardState
+    @ObservedObject var store = SharedStore.shared
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                Text("Für").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                chip(store.detectedApp.isEmpty ? "Auto" : "Auto: \(AppProfiles.profile(store.detectedApp)?.name ?? "")", "auto")
+                chip("Keine", "none")
+                ForEach(AppProfiles.all) { p in chip("\(p.emoji) \(p.name)", p.id) }
+            }
+            .padding(.horizontal, 2)
+        }
+    }
+
+    private func chip(_ title: String, _ id: String) -> some View {
+        let selected = store.appProfile == id
+        return Button { state.setAppProfile(id) } label: {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+                .foregroundStyle(selected ? Color.white : Color.primary)
+                .glassCapsule(tint: selected ? state.tint : nil, interactive: true)
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -640,7 +677,7 @@ struct KeyboardSettingsPanel: View {
             profileChips
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
                 navTile("KI & API", "key.fill", store.usesChatGPT ? "ChatGPT-Abo" : (store.hasKey ? "API-Schlüssel" : "Nicht verbunden"), .ai)
-                navTile("Kontext", "person.text.rectangle", store.personalContext.isEmpty ? "Leer" : "Aktiv", .context)
+                navTile("Kontext & Lernen", "brain.head.profile", store.contextCheck == "off" ? "Prüfung aus" : (store.contextCheck == "intense" ? "Prüfung intensiv" : "Prüfung normal"), .context)
                 navTile("Design", "paintbrush.pointed", (KeyStyle(rawValue: store.keyStyle) ?? .glass).label, .design)
                 navTile("Tippen", "keyboard", store.autocorrect ? "Autokorrektur an" : "Autokorrektur aus", .typing)
                 navTile("Makros", "text.badge.star", "\(store.macros.count) Makros", .macros)
@@ -765,6 +802,29 @@ struct KeyboardSettingsPanel: View {
 
     private var contextPage: some View {
         VStack(alignment: .leading, spacing: 10) {
+            row("KI-Verhalten (eigene Regeln)", store.aiBehavior.isEmpty ? "z. B. „Duze immer, kurz & locker, keine Emojis“" : store.aiBehavior, "slider.horizontal.below.square.and.square.filled") {
+                state.beginInput(.aiBehavior, prefill: store.aiBehavior)
+            }
+            Text("Schreibe für").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            AppPicker(state: state)
+            Text("Kontextprüfung beim Schreiben").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                chip("Aus", selected: store.contextCheck == "off") { store.contextCheck = "off" }
+                chip("Normal", selected: store.contextCheck == "normal") { store.contextCheck = "normal" }
+                chip("Intensiv", selected: store.contextCheck == "intense") { store.contextCheck = "intense" }
+            }
+            Text(store.contextCheck == "intense" ? "Prüft nach jedem Satz bzw. alle paar Wörter – auch Logik, Fakten und Ton. Ideal mit ChatGPT-Abo." : store.contextCheck == "normal" ? "Prüft nach jedem Satz auf falsche Wörter, Grammatik und Widersprüche. Auffällige Stellen erscheinen orange." : "Keine automatische Prüfung – nur über „Prüfen“.")
+                .font(.caption2).foregroundStyle(.secondary)
+            grid {
+                toggle("KI lernt mich", "brain.head.profile", $store.learnProfile)
+            }
+            row("Gelerntes Profil", store.learnedProfile.isEmpty ? "Noch leer – füllt sich beim Schreiben" : store.learnedProfile, "person.text.rectangle") {
+                state.beginInput(.learnedProfile, prefill: store.learnedProfile)
+            }
+            HStack {
+                actionButton("Jetzt lernen", "sparkles") { state.learnNow() }
+                actionButton("Vergessen", "trash") { state.forgetProfile() }
+            }
             row("Über mich", store.personalContext.isEmpty ? "Tippen zum Ausfüllen" : store.personalContext, "person.crop.circle") {
                 state.beginInput(.personalContext, prefill: store.personalContext)
             }
@@ -892,7 +952,45 @@ struct KeyboardSettingsPanel: View {
     private var typingPage: some View {
         VStack(alignment: .leading, spacing: 10) {
             typingToggles
+            if store.haptics { hapticSettings }
             LearnedTokensView(state: state)
+        }
+    }
+
+    private var hapticSettings: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Haptik").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Spacer()
+                Text(store.hapticStrength < 0.02 ? "Aus" : "\(Int(store.hapticStrength * 100)) %")
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 10) {
+                Image(systemName: "hand.tap").foregroundStyle(.secondary)
+                Slider(value: $store.hapticStrength, in: 0...1, step: 0.05, onEditingChanged: { editing in
+                    if !editing { state.hapticPreview() }
+                })
+                Image(systemName: "hand.tap.fill").foregroundStyle(state.tint)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    hapticChip("Wie iOS", "light", 0.6)
+                    hapticChip("Sanft", "soft", 0.5)
+                    hapticChip("Knackig", "rigid", 0.65)
+                    hapticChip("Mittel", "medium", 0.7)
+                    hapticChip("Kräftig", "heavy", 0.85)
+                }
+            }
+        }
+        .padding(10)
+        .glass(cornerRadius: 12)
+    }
+
+    private func hapticChip(_ title: String, _ style: String, _ strength: Double) -> some View {
+        chip(title, selected: store.hapticStyle == style) {
+            store.hapticStyle = style
+            store.hapticStrength = strength
+            state.hapticPreview()
         }
     }
 
@@ -937,13 +1035,32 @@ struct KeyboardSettingsPanel: View {
     private var actionsPage: some View {
         VStack(alignment: .leading, spacing: 8) {
             actionButton("Eigene KI-Aktion", "plus") { state.beginInput(.actionTitle) }
+            Text("📱-Knopf: Aktion nur in bestimmten Apps zeigen (z. B. nur Discord). ✏️ ändert die Anweisung.")
+                .font(.caption2).foregroundStyle(.secondary)
             ForEach(store.actions) { a in
                 HStack {
                     Image(systemName: a.symbol).foregroundStyle(state.tint).frame(width: 20)
                     Text(a.title).font(.footnote.weight(.semibold))
                     Text(a.category.label).font(.caption2).foregroundStyle(.secondary)
+                    if !a.apps.isEmpty {
+                        Text(a.apps.compactMap { AppProfiles.profile($0)?.emoji }.joined()).font(.caption2)
+                    }
                     Spacer()
+                    Menu {
+                        Button { setApps(a, []) } label: { Label("Überall anzeigen", systemImage: a.apps.isEmpty ? "checkmark" : "globe") }
+                        ForEach(AppProfiles.all) { p in
+                            Button { toggleApp(a, p.id) } label: {
+                                Label("\(p.emoji) \(p.name)", systemImage: a.apps.contains(p.id) ? "checkmark" : "app")
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "app.badge").foregroundStyle(a.apps.isEmpty ? Color.secondary : state.tint)
+                    }
                     if !a.builtIn {
+                        Button { state.beginInput(.actionEdit(a.id), prefill: a.prompt) } label: {
+                            Image(systemName: "pencil").foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
                         Button { store.actions.removeAll { $0.id == a.id } } label: {
                             Image(systemName: "trash").foregroundStyle(.secondary)
                         }
@@ -1043,6 +1160,17 @@ struct KeyboardSettingsPanel: View {
             Button("Standard wiederherstellen") { store.toolbarItems = ToolItem.defaultOrder }
                 .font(.caption)
         }
+    }
+
+    private func setApps(_ a: AIAction, _ apps: [String]) {
+        if let i = store.actions.firstIndex(where: { $0.id == a.id }) { store.actions[i].apps = apps }
+        state.feedback()
+    }
+
+    private func toggleApp(_ a: AIAction, _ id: String) {
+        var apps = a.apps
+        if apps.contains(id) { apps.removeAll { $0 == id } } else { apps.append(id) }
+        setApps(a, apps)
     }
 
     private func moveTool(_ index: Int, _ delta: Int) {
@@ -1541,5 +1669,236 @@ struct CommandsPanel: View {
                 .glassCapsule(tint: state.tint.opacity(0.3), interactive: true)
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Discord
+
+struct DiscordPanel: View {
+    @ObservedObject var state: KeyboardState
+    @ObservedObject var store = SharedStore.shared
+
+    private var now: Int { Int(Date().timeIntervalSince1970) }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                if !state.hasFullAccess || !store.hasAPIKey {
+                    MissingSetupBanner(state: state)
+                }
+                label("ANKÜNDIGUNG MIT KI")
+                HStack(spacing: 6) {
+                    chip("🇩🇪 Deutsch", store.discordLanguages == "de") { store.discordLanguages = "de" }
+                    chip("🇬🇧 Englisch", store.discordLanguages == "en") { store.discordLanguages = "en" }
+                    chip("🇩🇪+🇬🇧 Beides", store.discordLanguages == "both") { store.discordLanguages = "both" }
+                }
+                HStack(spacing: 6) {
+                    chip("Ohne Ping", store.discordMention.isEmpty) { store.discordMention = "" }
+                    chip("@everyone", store.discordMention == "@everyone") { store.discordMention = "@everyone" }
+                    chip("@here", store.discordMention == "@here") { store.discordMention = "@here" }
+                    Spacer(minLength: 0)
+                    chip(store.discordAutoCopy ? "📋 Auto-Kopie an" : "📋 Auto-Kopie aus", store.discordAutoCopy) { store.discordAutoCopy.toggle() }
+                }
+                HStack(spacing: 6) {
+                    bigButton("Beschreiben …", "megaphone.fill", prominent: true) {
+                        guard state.hasFullAccess, store.hasAPIKey else { state.showToast("Erst KI-Zugang einrichten."); return }
+                        state.beginInput(.discordAnnounce)
+                    }
+                    bigButton("Aus Feldtext", "text.badge.star") { state.discordAnnouncementFromField() }
+                    bigButton("Formatieren", "wand.and.stars") { state.discordFormatField() }
+                }
+                label("FORMATIEREN (MARKIERUNG ODER CURSOR)")
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 5), spacing: 6) {
+                    fmt("B", "Fett", bold: true) { state.discordWrap("**", "**") }
+                    fmt("I", "Kursiv") { state.discordWrap("*", "*") }
+                    fmt("U", "Unterstr.") { state.discordWrap("__", "__") }
+                    fmt("S", "Durch") { state.discordWrap("~~", "~~") }
+                    fmt("▮▮", "Spoiler") { state.discordWrap("||", "||") }
+                    fmt("#", "Titel") { state.discordLine("# ") }
+                    fmt("##", "Unter") { state.discordLine("## ") }
+                    fmt("###", "Klein") { state.discordLine("### ") }
+                    fmt("-#", "Fußtext") { state.discordLine("-# ") }
+                    fmt(">", "Zitat") { state.discordLine("> ") }
+                    fmt("•", "Liste") { state.discordLine("- ") }
+                    fmt("1.", "Nummer") { state.discordLine("1. ") }
+                    fmt("</>", "Code") { state.discordWrap("`", "`") }
+                    fmt("```", "Block") { state.discordWrap("```\n", "\n```") }
+                    fmt("🔗", "Link") { state.discordWrap("[", "](https://)") }
+                }
+                label("EINFÜGEN · LANG DRÜCKEN = KOPIEREN")
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        snippet("🕒 Jetzt (relativ)", "<t:\(now):R>")
+                        snippet("📅 Datum + Uhrzeit", "<t:\(now):f>")
+                        snippet("📆 Datum", "<t:\(now):D>")
+                        snippet("@everyone", "@everyone")
+                        snippet("@here", "@here")
+                        snippet("Trennlinie", "\n━━━━━━━━━━━━━━━━━━\n")
+                        snippet("Unsichtbar", "\u{200B}")
+                    }
+                }
+                Text("Zeitstempel zeigen jedem die Uhrzeit in seiner Zeitzone. Für andere Zeiten: KI-Ankündigung mit Datum beschreiben.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            .padding(8)
+        }
+    }
+
+    private func label(_ t: String) -> some View {
+        Text(t).font(.system(size: 10, weight: .bold)).foregroundStyle(.secondary).padding(.leading, 4)
+    }
+
+    private func chip(_ title: String, _ selected: Bool, action: @escaping () -> Void) -> some View {
+        Button { action(); state.feedback() } label: {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .padding(.horizontal, 10)
+                .frame(height: 30)
+                .foregroundStyle(selected ? Color.white : Color.primary)
+                .glassCapsule(tint: selected ? state.tint : nil, interactive: true)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func bigButton(_ title: String, _ symbol: String, prominent: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: symbol).font(.system(size: 15, weight: .semibold))
+                Text(title).font(.system(size: 11, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
+            }
+            .frame(maxWidth: .infinity, minHeight: 50)
+            .foregroundStyle(prominent ? Color.white : Color.primary)
+            .glass(cornerRadius: 14, tint: prominent ? state.tint : nil, interactive: true)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func fmt(_ symbol: String, _ title: String, bold: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 1) {
+                Text(symbol).font(.system(size: 15, weight: bold ? .heavy : .semibold, design: .monospaced)).lineLimit(1).minimumScaleFactor(0.6)
+                Text(title).font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary).lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, minHeight: 42)
+            .glass(cornerRadius: 11, interactive: true)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func snippet(_ title: String, _ text: String) -> some View {
+        Button { state.discordInsert(text) } label: {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 11)
+                .frame(height: 32)
+                .glassCapsule(interactive: true)
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button { state.discordInsert(text, copy: true) } label: { Label("Kopieren", systemImage: "doc.on.doc") }
+            Button { state.discordInsert(text) } label: { Label("Einfügen", systemImage: "text.insert") }
+        }
+    }
+}
+
+// MARK: - Kontextprüfung
+
+struct CheckPanel: View {
+    @ObservedObject var state: KeyboardState
+    @ObservedObject var bar: BarModel
+
+    init(state: KeyboardState) {
+        _state = ObservedObject(wrappedValue: state)
+        _bar = ObservedObject(wrappedValue: state.bar)
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                if bar.checking {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("KI prüft deinen Text im Zusammenhang …").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                if !state.checkedText.isEmpty {
+                    Text(highlighted)
+                        .font(.system(size: 14))
+                        .lineLimit(9)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                        .glass(cornerRadius: 12)
+                }
+                if !bar.checking && bar.issues.isEmpty {
+                    Label("Keine Auffälligkeiten gefunden.", systemImage: "checkmark.seal.fill")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.green)
+                }
+                ForEach(bar.issues) { issue in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) {
+                            Text(issue.kind)
+                                .font(.system(size: 10, weight: .bold))
+                                .padding(.horizontal, 7).padding(.vertical, 3)
+                                .background(Capsule().fill(Color.orange.opacity(0.25)))
+                            if !issue.reason.isEmpty {
+                                Text(issue.reason).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        HStack(spacing: 6) {
+                            Text(issue.original).strikethrough().foregroundStyle(.red).lineLimit(2)
+                            Image(systemName: "arrow.right").font(.caption2).foregroundStyle(.secondary)
+                            Text(issue.suggestion).fontWeight(.semibold).foregroundStyle(.green).lineLimit(2)
+                            Spacer(minLength: 0)
+                            Button { state.dismissIssue(issue) } label: {
+                                Image(systemName: "xmark").font(.caption.weight(.bold)).frame(width: 30, height: 30).glass(cornerRadius: 15, interactive: true)
+                            }
+                            .buttonStyle(.plain)
+                            Button { state.applyIssue(issue) } label: {
+                                Image(systemName: "checkmark").font(.caption.weight(.bold)).foregroundStyle(.white)
+                                    .frame(width: 30, height: 30).glass(cornerRadius: 15, tint: state.tint, interactive: true)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .font(.footnote)
+                    }
+                    .padding(9)
+                    .glass(cornerRadius: 12)
+                }
+                HStack(spacing: 6) {
+                    if bar.issues.count > 1 {
+                        Button { state.applyAllIssues() } label: {
+                            Label("Alle übernehmen", systemImage: "checkmark.circle.fill")
+                                .font(.caption.weight(.semibold)).foregroundStyle(.white)
+                                .frame(maxWidth: .infinity, minHeight: 36)
+                                .glass(cornerRadius: 12, tint: state.tint, interactive: true)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Button { state.runContextCheck(manual: true) } label: {
+                        Label("Erneut prüfen", systemImage: "arrow.clockwise")
+                            .font(.caption.weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 36)
+                            .glass(cornerRadius: 12, interactive: true)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(8)
+        }
+    }
+
+    /// Text mit orange markierten, möglicherweise falschen Stellen.
+    private var highlighted: AttributedString {
+        var attr = AttributedString(state.checkedText)
+        for issue in bar.issues {
+            if let r = attr.range(of: issue.original, options: .backwards) {
+                attr[r].backgroundColor = Color.orange.opacity(0.35)
+                attr[r].underlineStyle = .single
+            }
+        }
+        return attr
     }
 }

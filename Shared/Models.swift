@@ -53,10 +53,13 @@ struct AIAction: Codable, Identifiable, Hashable {
     var category: ActionCategory = .custom
     /// Zeigt nach der Antwort markierte Änderungen (für Korrekturen).
     var showDiff = false
+    /// Nur in diesen Apps anzeigen (AppProfile-IDs). Leer = überall.
+    var apps: [String] = []
 
-    enum CodingKeys: String, CodingKey { case id, title, symbol, prompt, enabled, builtIn, category, showDiff }
+    enum CodingKeys: String, CodingKey { case id, title, symbol, prompt, enabled, builtIn, category, showDiff, apps }
 
-    init(id: UUID = UUID(), title: String, symbol: String, prompt: String, enabled: Bool = true, builtIn: Bool = false, category: ActionCategory = .custom, showDiff: Bool = false) {
+    init(id: UUID = UUID(), title: String, symbol: String, prompt: String, enabled: Bool = true, builtIn: Bool = false, category: ActionCategory = .custom, showDiff: Bool = false, apps: [String] = []) {
+        self.apps = apps
         self.id = id
         self.title = title
         self.symbol = symbol
@@ -77,7 +80,11 @@ struct AIAction: Codable, Identifiable, Hashable {
         builtIn = try c.decodeIfPresent(Bool.self, forKey: .builtIn) ?? false
         category = try c.decodeIfPresent(ActionCategory.self, forKey: .category) ?? .custom
         showDiff = try c.decodeIfPresent(Bool.self, forKey: .showDiff) ?? false
+        apps = try c.decodeIfPresent([String].self, forKey: .apps) ?? []
     }
+
+    /// Passt die Aktion zur aktuellen App?
+    func fits(_ app: AppProfile?) -> Bool { apps.isEmpty || (app.map { apps.contains($0.id) } ?? false) }
 }
 
 enum AIScope: String, Codable, CaseIterable, Identifiable {
@@ -94,6 +101,19 @@ enum AIScope: String, Codable, CaseIterable, Identifiable {
 
 extension AIAction {
     static let defaults: [AIAction] = [
+        // App-spezifisch
+        AIAction(title: "Discord-Format", symbol: "number.square",
+                 prompt: "Formatiere den Text als schön strukturierte Discord-Nachricht mit Discord-Markdown (Überschriften, **fett** für Wichtiges, Listen, passende Emojis). Inhalt und Sprache beibehalten, nichts erfinden.",
+                 builtIn: true, category: .format, apps: ["discord"]),
+        AIAction(title: "Ankündigung", symbol: "megaphone",
+                 prompt: "Mache aus dem Text eine ansprechende Discord-Ankündigung: „# “-Überschrift mit Emoji, kurze Einleitung, die wichtigsten Infos als Liste mit **fetten** Schlüsselbegriffen, klarer Abschluss, optional „-# “-Fußzeile. Inhalt nicht erfinden.",
+                 builtIn: true, category: .format, apps: ["discord"]),
+        AIAction(title: "WhatsApp-Format", symbol: "message.badge",
+                 prompt: "Formatiere den Text als gut lesbare WhatsApp-Nachricht: *fett* (ein Sternchen) für Wichtiges, kurze Absätze, Listen mit „- “, passende Emojis. Inhalt beibehalten.",
+                 builtIn: true, category: .format, apps: ["whatsapp"]),
+        AIAction(title: "Post mit Hashtags", symbol: "number",
+                 prompt: "Mache aus dem Text einen ansprechenden Social-Media-Beitrag mit starker erster Zeile, kurzen Absätzen, passenden Emojis und 3–8 relevanten Hashtags am Ende.",
+                 builtIn: true, category: .format, apps: ["instagram", "linkedin"]),
         // Zusammenfassen
         AIAction(title: "Kurz", symbol: "text.append",
                  prompt: "Fasse den Text in 2–4 klaren Sätzen zusammen. Konzentriere dich auf die wichtigsten Aussagen, Entscheidungen und Zahlen.",

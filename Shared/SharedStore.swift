@@ -33,7 +33,7 @@ final class SharedStore: ObservableObject {
 
     static let defaultChatModel = "gpt-6-luna"
     static let fallbackModels = ["gpt-6-luna", "gpt-5.6-luna", "gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"]
-    static let settingsVersion = 7
+    static let settingsVersion = 8
 
     @Published var apiKey: String = "" { didSet { set(apiKey, "apiKey") } }
     /// API-Schlüssel vorübergehend deaktiviert (bleibt gespeichert).
@@ -45,6 +45,22 @@ final class SharedStore: ObservableObject {
     @Published var knownModels: [String] = [] { didSet { setCodable(knownModels, "knownModels") } }
     @Published var streamResponses: Bool = true { didSet { set(streamResponses, "streamResponses") } }
     @Published var outputLanguage: String = "auto" { didSet { set(outputLanguage, "outputLanguage") } }
+
+    // Ziel-App: "auto" (erkennen), "none" oder eine AppProfile-ID
+    @Published var appProfile: String = "auto" { didSet { set(appProfile, "appProfile") } }
+    /// Von der Tastatur erkannte App (nur zur Laufzeit, wird nicht gespeichert).
+    @Published var detectedApp: String = ""
+    /// Eigene Regeln, wie sich die KI verhalten soll.
+    @Published var aiBehavior: String = "" { didSet { set(aiBehavior, "aiBehavior") } }
+    /// Von der KI gelerntes Profil über den Nutzer (Stil, Themen, Vorlieben).
+    @Published var learnedProfile: String = "" { didSet { set(learnedProfile, "learnedProfile") } }
+    @Published var learnProfile: Bool = true { didSet { set(learnProfile, "learnProfile") } }
+    /// Kontextprüfung beim Schreiben: "off", "normal", "intense"
+    @Published var contextCheck: String = "normal" { didSet { set(contextCheck, "contextCheck") } }
+    // Discord: Sprache der Ankündigungen ("de", "en", "both"), Erwähnung, automatisch kopieren
+    @Published var discordLanguages: String = "de" { didSet { set(discordLanguages, "discordLanguages") } }
+    @Published var discordMention: String = "" { didSet { set(discordMention, "discordMention") } }
+    @Published var discordAutoCopy: Bool = true { didSet { set(discordAutoCopy, "discordAutoCopy") } }
 
     // ChatGPT-Abo („Sign in with ChatGPT“): "apikey" oder "chatgpt"
     @Published var aiProvider: String = "apikey" { didSet { set(aiProvider, "aiProvider") } }
@@ -69,6 +85,9 @@ final class SharedStore: ObservableObject {
     @Published var clipboardLimit: Int = 50 { didSet { set(clipboardLimit, "clipboardLimit") } }
 
     @Published var haptics: Bool = true { didSet { set(haptics, "haptics") } }
+    /// Haptik-Stärke 0…1 und Art („light“ = wie iOS, „soft“, „medium“, „rigid“, „heavy“).
+    @Published var hapticStrength: Double = 0.6 { didSet { set(hapticStrength, "hapticStrength") } }
+    @Published var hapticStyle: String = "light" { didSet { set(hapticStyle, "hapticStyle") } }
     @Published var keySound: Bool = true { didSet { set(keySound, "keySound") } }
     @Published var keyPopups: Bool = true { didSet { set(keyPopups, "keyPopups") } }
     @Published var autocorrect: Bool = true { didSet { set(autocorrect, "autocorrect") } }
@@ -143,6 +162,16 @@ final class SharedStore: ObservableObject {
         upd(\.clipboardEnabled, bool("clipboardEnabled", true))
         upd(\.clipboardLimit, d.object(forKey: "clipboardLimit") as? Int ?? 50)
         upd(\.haptics, bool("haptics", true))
+        upd(\.hapticStrength, d.object(forKey: "hapticStrength") as? Double ?? 0.6)
+        upd(\.hapticStyle, d.string(forKey: "hapticStyle") ?? "light")
+        upd(\.appProfile, d.string(forKey: "appProfile") ?? "auto")
+        upd(\.aiBehavior, d.string(forKey: "aiBehavior") ?? "")
+        upd(\.learnedProfile, d.string(forKey: "learnedProfile") ?? "")
+        upd(\.learnProfile, bool("learnProfile", true))
+        upd(\.contextCheck, d.string(forKey: "contextCheck") ?? "normal")
+        upd(\.discordLanguages, d.string(forKey: "discordLanguages") ?? "de")
+        upd(\.discordMention, d.string(forKey: "discordMention") ?? "")
+        upd(\.discordAutoCopy, bool("discordAutoCopy", true))
         upd(\.keySound, bool("keySound", true))
         upd(\.keyPopups, bool("keyPopups", true))
         upd(\.autocorrect, bool("autocorrect", true))
@@ -245,6 +274,14 @@ final class SharedStore: ObservableObject {
             if !items.contains("commands") { items.insert("commands", at: min(2, items.count)) }
             if let newData = try? JSONEncoder().encode(items) { d.set(newData, forKey: "toolbarItems") }
         }
+        // v8: Discord-Werkzeug und Textprüfung in die Schnellleiste
+        if version < 8, let data = d.data(forKey: "toolbarItems"), var items = try? JSONDecoder().decode([String].self, from: data) {
+            for (id, after) in [("check", "ai"), ("discord", "commands")] where !items.contains(id) {
+                let pos = items.firstIndex(of: after).map { $0 + 1 } ?? items.count
+                items.insert(id, at: min(pos, items.count))
+            }
+            if let newData = try? JSONEncoder().encode(items) { d.set(newData, forKey: "toolbarItems") }
+        }
         // v7: Ein-Klick-Übersetzen ins Englische direkt hinter „Übersetzen“
         if version < 7, let data = d.data(forKey: "toolbarItems"), var items = try? JSONDecoder().decode([String].self, from: data) {
             if !items.contains(where: { $0.hasPrefix(ToolItem.translatePrefix) }) {
@@ -261,6 +298,15 @@ final class SharedStore: ObservableObject {
 
     var activeProfile: ContextProfile? {
         profiles.first { $0.id.uuidString == activeProfileID }
+    }
+
+    /// Die App, für die gerade geschrieben wird (erkannt oder gewählt).
+    var activeApp: AppProfile? {
+        switch appProfile {
+        case "none": return nil
+        case "auto": return detectedApp.isEmpty ? nil : AppProfiles.profile(detectedApp)
+        default: return AppProfiles.profile(appProfile)
+        }
     }
 
     /// Ein API-Schlüssel ist gespeichert (egal ob aktiv).

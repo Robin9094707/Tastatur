@@ -277,7 +277,7 @@ extension KeyboardState {
         HistoryStore.remove(e.id) { [weak self] list in self?.extras.history = list }
     }
 
-    func clearHistory() {
+    func clearWritingHistory() {
         HistoryStore.clear()
         extras.history = []
         extras.deleted = ""
@@ -703,7 +703,7 @@ struct HistoryPanel: View {
                     Text("Ganzen Verlauf löschen?").font(.caption)
                     Spacer()
                     Button("Abbrechen") { confirmClear = false }.font(.caption)
-                    Button("Löschen", role: .destructive) { state.clearHistory(); confirmClear = false }.font(.caption.weight(.bold))
+                    Button("Löschen", role: .destructive) { state.clearWritingHistory(); confirmClear = false }.font(.caption.weight(.bold))
                 }
                 .padding(8).glass(cornerRadius: 10)
             }

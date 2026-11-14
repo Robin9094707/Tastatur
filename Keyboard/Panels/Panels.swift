@@ -1292,6 +1292,7 @@ struct KeyboardSettingsPanel: View {
 
     private var typingToggles: some View {
         grid {
+            toggle("Sofort-Anschlag", "bolt.horizontal", $store.instantKeys)
             toggle("Autokorrektur", "textformat.abc.dottedunderline", $store.autocorrect)
             toggle("Wischen", "scribble.variable", $store.swipeTyping)
             toggle("KI beim Wischen", "sparkles", $store.swipeAI)

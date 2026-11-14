@@ -378,6 +378,10 @@ final class KeysView: UIView {
         var cursorMode = false
         var cursorStep = 0
         var handled = false
+        /// Sofort-Anschlag: Zeichen wurde schon beim Aufsetzen geschrieben.
+        var inserted = false
+        /// Großschreibung zum Zeitpunkt des Aufsetzens (für Akzente).
+        var upper = false
         // Gesten-Tippen
         var path: [CGPoint] = []
         var pathLength: CGFloat = 0
@@ -593,26 +597,51 @@ final class KeysView: UIView {
         return dx * dx + dy * dy
     }
 
-    // MARK: Touches
+    // MARK: Touches – Tipp-Kern
+    //
+    // Prinzip (Sofort-Anschlag, Standard):
+    // • Buchstaben und Zeichen werden im Moment der Berührung geschrieben – kein Warten aufs Loslassen und
+    //   keine Reihenfolge-Logik zwischen zwei Fingern. Jeder Finger zählt sofort und einzeln.
+    // • Gedrückt halten (Akzente) und Wischen ersetzen den schon geschriebenen Buchstaben danach.
+    // • Leertaste/Return/Ebenen lösen beim Loslassen aus (Leertaste kann Cursor-Wischen werden);
+    //   setzt vorher ein anderer Finger auf, werden sie zuerst ausgelöst, damit die Reihenfolge stimmt.
+
+    private var instantKeys: Bool { state?.store.instantKeys ?? true }
+
+    /// Etwas größere Trefferfläche nach oben: knapp über der oberen Reihe zählt noch als Taste.
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        point.x >= bounds.minX && point.x <= bounds.maxX && point.y >= bounds.minY - 6 && point.y <= bounds.maxY
+    }
 
     override func touchesBegan(_ set: Set<UITouch>, with event: UIEvent?) {
         for t in set {
             TypingMetrics.shared.touchArrived(t)
             let p = t.location(in: self)
-            // Schnelles Tippen: vorherige Tasten zuerst auslösen (Rollover), damit die Reihenfolge stimmt
-            for id in touchOrder {
-                guard let info = touches[id], !info.handled, !info.alternatesActive, !info.cursorMode, !info.swiping else { continue }
-                switch info.key.kind {
-                case .char, .space, .returnKey: commit(info)
-                default: break
-                }
-            }
+            flushPending()
             guard let k = smartKey(at: p) else { continue }
             let info = TouchInfo(key: k, startPoint: p)
+            info.upper = config?.layer == .letters && config?.shift != .off
             let id = ObjectIdentifier(t)
             touches[id] = info
             touchOrder.append(id)
             down(info)
+        }
+    }
+
+    /// Ein neuer Finger setzt auf: Offene Tasten der anderen Finger jetzt abschließen.
+    private func flushPending() {
+        for id in touchOrder {
+            guard let info = touches[id], !info.handled, !info.alternatesActive, !info.cursorMode, !info.swiping else { continue }
+            if info.inserted {
+                // Schon geschrieben – kann jetzt kein Akzent/Wischen mehr werden
+                info.handled = true
+                info.longPressTimer?.invalidate()
+                continue
+            }
+            switch info.key.kind {
+            case .char, .space, .returnKey: commit(info)
+            default: break
+            }
         }
     }
 
@@ -671,7 +700,7 @@ final class KeysView: UIView {
                 if trackSwipe(info, p) { continue }
                 // Finger rutscht auf andere Taste → neue Taste übernehmen
                 // Bei schnellen Tipps zählt die Taste, auf der der Finger aufsetzt (wie bei iOS)
-                if info.age > 0.14, !info.key.cellFrame.insetBy(dx: -4, dy: -6).contains(p), let nk = key(at: p), case .char = nk.kind {
+                if !info.inserted, info.age > 0.14, !info.key.cellFrame.insetBy(dx: -4, dy: -6).contains(p), let nk = key(at: p), case .char = nk.kind {
                     info.key.setPressed(false)
                     info.longPressTimer?.invalidate()
                     info.key = nk
@@ -693,10 +722,20 @@ final class KeysView: UIView {
                 info.handled = true
                 endSwipe(info)
             } else if !info.handled {
-                commit(info)
+                if info.inserted { finishInserted(info) } else { commit(info) }
             }
             finish(id)
         }
+    }
+
+    /// Sofort-Anschlag: Finger hebt ab. Nur bei gewähltem Akzent wird der Buchstabe ersetzt.
+    private func finishInserted(_ info: TouchInfo) {
+        info.handled = true
+        info.longPressTimer?.invalidate()
+        guard info.alternatesActive else { return }
+        alternates.isHidden = true
+        guard let s = alternates.selected, let first = alternates.options.first, s != first, let state else { return }
+        if state.undoLastTap() { state.insertAlternate(s) }
     }
 
     override func touchesCancelled(_ set: Set<UITouch>, with event: UIEvent?) {
@@ -704,7 +743,7 @@ final class KeysView: UIView {
             let id = ObjectIdentifier(t)
             // Bricht iOS eine Berührung ab (z. B. System-Geste am unteren Rand), ging beim schnellen
             // Tippen der Buchstabe verloren. Kurze, ruhige Tipps deshalb trotzdem auslösen.
-            if let info = touches[id], !info.handled, !info.swiping, !info.cursorMode, !info.alternatesActive,
+            if let info = touches[id], !info.handled, !info.inserted, !info.swiping, !info.cursorMode, !info.alternatesActive,
                info.age < 0.3, info.pathLength < letterKeyWidth * 0.8 {
                 switch info.key.kind {
                 case .char, .space, .returnKey: commit(info)
@@ -766,8 +805,16 @@ final class KeysView: UIView {
         k.setPressed(true)
         state?.keyDownFeedback(special: k.isSpecial)
         switch k.kind {
-        case .char:
-            showPopup(for: k)
+        case .char(let c):
+            showPopup(for: k, upper: info.upper)
+            if instantKeys, let state {
+                info.inserted = true
+                TypingMetrics.shared.measure("Buchstabe") {
+                    state.noteKeystroke()
+                    state.pendingTapPoint = info.startPoint
+                    state.tapKey(c)
+                }
+            }
             scheduleLongPress(info)
         case .delete:
             info.handled = true
@@ -840,6 +887,7 @@ final class KeysView: UIView {
             guard touches.count == 1, info.pathLength > letterKeyWidth * 1.35,
                   info.age > 0.11 || info.pathLength > letterKeyWidth * 2.6 else { return false }
             info.swiping = true
+            if info.inserted { state.undoLastTap(); info.inserted = false }
             info.longPressTimer?.invalidate()
             info.key.setPressed(false)
             popup.hide()
@@ -894,9 +942,9 @@ final class KeysView: UIView {
         }
     }
 
-    private func showPopup(for k: KeyCapView) {
+    private func showPopup(for k: KeyCapView, upper fixedUpper: Bool? = nil) {
         guard config?.popups == true, case .char(let c) = k.kind else { return }
-        let upper = config?.layer == .letters && config?.shift != .off
+        let upper = fixedUpper ?? (config?.layer == .letters && config?.shift != .off)
         popup.show(text: upper ? c.uppercased() : c, above: k.capFrameInParent, dark: dark, in: bounds)
         bringSubviewToFront(popup)
     }
@@ -905,10 +953,10 @@ final class KeysView: UIView {
         info.longPressTimer?.invalidate()
         guard case .char(let c) = info.key.kind, let alts = KeyLayouts.alternates[c.lowercased()] else { return }
         info.longPressTimer = Timer.scheduledTimer(withTimeInterval: 0.38, repeats: false) { [weak self, weak info] _ in
-            guard let self, let info, !info.handled else { return }
+            guard let self, let info, !info.handled, !info.swiping else { return }
             info.alternatesActive = true
             self.popup.hide()
-            let upper = self.config?.layer == .letters && self.config?.shift != .off
+            let upper = info.upper
             let options = [upper ? c.uppercased() : c] + alts.map { upper ? $0.uppercased() : $0 }
             self.alternates.show(options: options, above: info.key.capFrameInParent, dark: self.dark, in: self.bounds)
             self.bringSubviewToFront(self.alternates)

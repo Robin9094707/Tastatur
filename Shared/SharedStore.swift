@@ -89,6 +89,8 @@ final class SharedStore: ObservableObject {
     /// Light-Modus: nur die Basics (Tippen, Übersetzen, KI auf Knopfdruck, Ablage) – keine Vorschläge,
     /// Autokorrektur, Wischen, Trefferzonen, Hintergrund-Prüfungen oder Zwischenablage-Überwachung.
     @Published var lightMode: Bool = false { didSet { set(lightMode, "lightMode") } }
+    /// Sofort-Anschlag: Buchstaben beim Berühren schreiben (nicht erst beim Loslassen).
+    @Published var instantKeys: Bool = true { didSet { set(instantKeys, "instantKeys") } }
     /// Debug-Protokoll in der Tastatur aufzeichnen.
     @Published var debugLog: Bool = false { didSet { set(debugLog, "debugLog") } }
     /// Bei Anmeldefeldern „Passwörter“ in der Leiste zeigen.
@@ -217,6 +219,7 @@ final class SharedStore: ObservableObject {
         upd(\.clipFolders, getCodable("clipFolders") ?? [])
         upd(\.clipPeek, bool("clipPeek", true))
         upd(\.lightMode, bool("lightMode", false))
+        upd(\.instantKeys, bool("instantKeys", true))
         upd(\.debugLog, bool("debugLog", false))
         upd(\.passwordHelper, bool("passwordHelper", true))
         upd(\.loginAutoSwitch, bool("loginAutoSwitch", false))

@@ -537,7 +537,29 @@ final class KeyboardState: ObservableObject {
         insert(s)
     }
 
+    /// Was der letzte Buchstaben-Tipp eingefügt hat (Sofort-Anschlag: Akzent/Wischen ersetzt ihn danach).
+    private var lastTapOutput = ""
+
+    /// Nimmt den zuletzt getippten Buchstaben zurück – nur wenn er wirklich noch am Cursor steht.
+    @discardableResult
+    func undoLastTap() -> Bool {
+        let out = lastTapOutput
+        lastTapOutput = ""
+        guard !out.isEmpty else { return false }
+        if composeMode {
+            guard composeText.hasSuffix(out) else { return false }
+            composeText.removeLast(out.count)
+            return true
+        }
+        guard before.hasSuffix(out) else { return false }
+        for _ in 0..<out.count { proxy?.deleteBackward() }
+        if !wordTaps.isEmpty { wordTaps.removeLast() }
+        updateAutoShift()
+        return true
+    }
+
     func tapKey(_ key: String) {
+        lastTapOutput = ""
         finishDeletionBurst()
         var output = (shift != .off && layer == .letters) ? key.uppercased() : key
         // Intelligente Interpunktion wie bei iOS: „…“ und ’
@@ -557,6 +579,7 @@ final class KeyboardState: ObservableObject {
         }
         if composeMode {
             composeText += output
+            lastTapOutput = output
             if shift == .on { shift = .off }
             return
         }
@@ -583,6 +606,7 @@ final class KeyboardState: ObservableObject {
         if bar.clip != nil, !bar.clipHidden { bar.clipHidden = true }
         let startsWord = currentWord.isEmpty
         proxy?.insertText(output)
+        lastTapOutput = output
         if output.count == 1, output.first?.isLetter == true, layer == .letters {
             if startsWord { wordTaps = [] }
             wordTaps.append(pendingTapPoint ?? CGPoint(x: -9999, y: -9999))

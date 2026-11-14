@@ -63,6 +63,12 @@ struct KeyboardRootView: View {
 
 struct Toolbar: View {
     @ObservedObject var state: KeyboardState
+    @ObservedObject var bar: BarModel
+
+    init(state: KeyboardState) {
+        _state = ObservedObject(wrappedValue: state)
+        _bar = ObservedObject(wrappedValue: state.bar)
+    }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -73,7 +79,7 @@ struct Toolbar: View {
                     Image(systemName: "sparkles")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(state.tint)
-                        .symbolEffect(.pulse, options: .repeating, isActive: state.aiThinking)
+                        .symbolEffect(.pulse, options: .repeating, isActive: bar.thinking)
                         .frame(width: 38, height: 38)
                         .glass(cornerRadius: 19, interactive: true, force: true)
                 }
@@ -127,8 +133,8 @@ struct Toolbar: View {
     }
 
     private var suggestionBar: some View {
-        HStack(spacing: 0) {
-            if let fix = state.liveFix {
+        Group {
+            if let fix = bar.liveFix {
                 Button { state.undoLiveFix() } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "checkmark.seal.fill").foregroundStyle(state.tint)
@@ -145,70 +151,94 @@ struct Toolbar: View {
                 }
                 .buttonStyle(.plain)
                 .transition(.move(edge: .top).combined(with: .opacity))
-            } else if state.suggestions.isEmpty && state.aiPhrase == nil {
-                Spacer()
-                if let profile = state.store.activeProfile {
-                    Text("\(profile.emoji) \(profile.name)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else if state.aiThinking {
-                    Text("KI denkt mit …").font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-            } else {
-                ForEach(Array(state.suggestions.enumerated()), id: \.element.id) { index, s in
-                    if index > 0 {
-                        Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 1, height: 18)
+            } else if bar.suggestions.isEmpty && bar.phrases.isEmpty {
+                HStack {
+                    Spacer()
+                    if let profile = state.store.activeProfile {
+                        Text("\(profile.emoji) \(profile.name)").font(.caption).foregroundStyle(.secondary)
+                    } else if bar.thinking {
+                        Text("KI denkt mit …").font(.caption).foregroundStyle(.secondary)
                     }
-                    suggestionButton(s)
+                    Spacer()
                 }
-                if let phrase = state.aiPhrase {
-                    Button { state.pickSuggestion(phrase) } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "sparkles").font(.system(size: 10, weight: .bold))
-                            Text(phrase.display ?? phrase.text)
-                                .font(.system(size: 14, weight: .medium))
-                                .lineLimit(1)
-                                .truncationMode(.tail)
+            } else if bar.suggestions.count <= 3 && bar.phrases.isEmpty {
+                // Klassische iOS-Leiste: drei gleich breite Felder
+                HStack(spacing: 0) {
+                    ForEach(Array(bar.suggestions.enumerated()), id: \.element.id) { index, s in
+                        if index > 0 {
+                            Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 1, height: 18)
                         }
-                        .foregroundStyle(Color.primary)
-                        .padding(.horizontal, 10)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(Capsule().fill(state.tint.opacity(0.30)).padding(3))
-                        .contentShape(Rectangle())
+                        suggestionButton(s, flexible: true)
                     }
-                    .buttonStyle(.plain)
-                    .layoutPriority(1)
-                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                }
+            } else {
+                // Viele Vorschläge: horizontal scrollbar
+                ScrollViewReader { reader in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 4) {
+                            Color.clear.frame(width: 1).id("start")
+                            ForEach(bar.suggestions) { s in suggestionButton(s, flexible: false) }
+                            ForEach(bar.phrases) { p in phraseButton(p) }
+                        }
+                        .padding(.horizontal, 4)
+                    }
+                    .onChange(of: bar.suggestions.map(\.text)) { _, _ in
+                        reader.scrollTo("start", anchor: .leading)
+                    }
                 }
             }
         }
-        .animation(.easeOut(duration: 0.18), value: state.aiPhrase?.text)
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: state.liveFix)
+        .animation(.easeOut(duration: 0.18), value: bar.phrases.map(\.text))
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: bar.liveFix)
         .frame(height: 38)
+        .frame(maxWidth: .infinity)
         .glassCapsule(force: true)
     }
 
-    private func suggestionButton(_ s: Suggestion) -> some View {
-        Button { state.pickSuggestion(s) } label: {
+    private func phraseButton(_ phrase: Suggestion) -> some View {
+        Button { state.pickSuggestion(phrase) } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "sparkles").font(.system(size: 10, weight: .bold))
+                Text(phrase.display ?? phrase.text)
+                    .font(.system(size: 14, weight: .medium))
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            .foregroundStyle(Color.primary)
+            .padding(.horizontal, 12)
+            .frame(height: 30)
+            .background(Capsule().fill(state.tint.opacity(0.30)))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+    }
+
+    @ViewBuilder
+    private func suggestionButton(_ s: Suggestion, flexible: Bool) -> some View {
+        let label = Button { state.pickSuggestion(s) } label: {
             HStack(spacing: 3) {
                 if s.kind == .ai { Image(systemName: "sparkle").font(.system(size: 9)).foregroundStyle(state.tint) }
+                if s.kind == .token { Image(systemName: "person.crop.circle.badge.checkmark").font(.system(size: 11)).foregroundStyle(state.tint) }
                 Text(s.display ?? s.text)
                     .font(.system(size: 16, weight: s.kind == .correction ? .semibold : .regular))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.6)
+                    .minimumScaleFactor(flexible ? 0.6 : 1)
+                    .fixedSize(horizontal: !flexible, vertical: false)
             }
-            .padding(.horizontal, 6)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal, flexible ? 6 : 10)
+            .frame(maxWidth: flexible ? .infinity : nil, maxHeight: .infinity)
+            .frame(minWidth: flexible ? nil : 54)
             .foregroundStyle(s.kind == .typed ? Color.secondary : Color.primary)
             .background {
-                if s.kind == .correction || s.kind == .macro {
+                if s.kind == .correction || s.kind == .macro || s.kind == .token {
                     Capsule().fill(state.tint.opacity(0.28)).padding(3)
                 }
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        label
     }
 
     private var composeBar: some View {

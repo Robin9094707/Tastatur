@@ -17,12 +17,28 @@ enum Panel: Equatable {
 }
 
 struct Suggestion: Identifiable, Equatable {
-    enum Kind { case word, typed, correction, macro, ai, phrase }
+    enum Kind { case word, typed, correction, macro, ai, phrase, token }
     let id = UUID()
     var text: String
     var kind: Kind
     var display: String? = nil
     var rest: String = ""
+}
+
+/// Nur die Vorschlagsleiste beobachtet dieses Modell – Tippen zeichnet so nicht die ganze Tastatur neu.
+final class BarModel: ObservableObject {
+    @Published var suggestions: [Suggestion] = []
+    @Published var phrases: [Suggestion] = []
+    @Published var thinking = false
+    @Published var liveFix: KeyboardState.LiveFix?
+}
+
+/// Zustand, den nur das UIKit-Tastenfeld braucht.
+final class KeyModel: ObservableObject {
+    @Published var layer: KeyboardLayer = .letters
+    @Published var shift: ShiftState = .on
+    @Published var returnTitle = "⏎"
+    @Published var needsGlobe = true
 }
 
 final class KeyboardState: ObservableObject {
@@ -31,14 +47,43 @@ final class KeyboardState: ObservableObject {
     let engine = TextEngine()
     private let client = OpenAIClient(store: SharedStore.shared)
 
-    // Layout
-    @Published var layer: KeyboardLayer = .letters
-    @Published var shift: ShiftState = .on
+    let bar = BarModel()
+    let keyModel = KeyModel()
+
+    // Layout (Weiterleitungen in die schlanken Teil-Modelle)
+    var layer: KeyboardLayer {
+        get { keyModel.layer }
+        set { if keyModel.layer != newValue { keyModel.layer = newValue } }
+    }
+    var shift: ShiftState {
+        get { keyModel.shift }
+        set { if keyModel.shift != newValue { keyModel.shift = newValue } }
+    }
+    var returnTitle: String {
+        get { keyModel.returnTitle }
+        set { if keyModel.returnTitle != newValue { keyModel.returnTitle = newValue } }
+    }
+    var needsGlobe: Bool {
+        get { keyModel.needsGlobe }
+        set { if keyModel.needsGlobe != newValue { keyModel.needsGlobe = newValue } }
+    }
+    var suggestions: [Suggestion] {
+        get { bar.suggestions }
+        set { bar.suggestions = newValue }
+    }
+    var aiPhrase: Suggestion? {
+        get { bar.phrases.first }
+        set { let v = newValue.map { [$0] } ?? []; if v.map(\.text) != bar.phrases.map(\.text) { bar.phrases = v } }
+    }
+    var aiThinking: Bool {
+        get { bar.thinking }
+        set { if bar.thinking != newValue { bar.thinking = newValue } }
+    }
+    var liveFix: LiveFix? {
+        get { bar.liveFix }
+        set { bar.liveFix = newValue }
+    }
     @Published var panel: Panel = .none
-    @Published var suggestions: [Suggestion] = []
-    @Published var aiPhrase: Suggestion?
-    @Published var aiThinking = false
-    @Published var liveFix: LiveFix?
     private var liveCheckWork: DispatchWorkItem?
     private var liveCheckPending = false
     private var wordsSinceCheck = 0
@@ -56,8 +101,6 @@ final class KeyboardState: ObservableObject {
     private var predictionCache: [String: OpenAIClient.Prediction] = [:]
     private var predictionOrder: [String] = []
     @Published var hasFullAccess = false
-    @Published var needsGlobe = true
-    @Published var returnTitle = "⏎"
     @Published var toast: String?
 
     // KI
@@ -270,6 +313,30 @@ final class KeyboardState: ObservableObject {
         return word
     }
 
+    /// Alles seit dem letzten Leerzeichen (für E-Mails, Links usw.).
+    var currentToken: String {
+        var t = ""
+        for ch in before.reversed() {
+            if ch.isWhitespace { break }
+            t.insert(ch, at: t.startIndex)
+        }
+        return t
+    }
+
+    /// Das vorletzte Wort (für Dreier-Folgen).
+    var secondPreviousWord: String? {
+        let text = String(before.dropLast(currentWord.count))
+        let words = text.split { !($0.isLetter || $0.isNumber) }
+        return words.count >= 2 ? String(words[words.count - 2]) : nil
+    }
+
+    /// Enthält das aktuelle „Wort“ Zeichen wie @ . / : ? Dann ist es eine Adresse o. Ä. – nicht korrigieren.
+    private var tokenIsSpecial: Bool {
+        let t = currentToken
+        return t.contains("@") || t.contains("/") || t.contains(":") || t.contains("_")
+            || (t.contains(".") && t.last != ".") || t.rangeOfCharacter(from: .decimalDigits) != nil
+    }
+
     var previousWord: String? {
         let text = String(before.dropLast(currentWord.count))
         let words = text.split { !($0.isLetter || $0.isNumber) }
@@ -346,6 +413,15 @@ final class KeyboardState: ObservableObject {
     private func commitWord(trailing: String) {
         let word = currentWord
         let prev = previousWord
+        let token = currentToken
+        if !token.isEmpty, tokenIsSpecial {
+            // Persönliche Einträge lernen, nie autokorrigieren
+            engine.learnToken(token.trimmingCharacters(in: CharacterSet(charactersIn: ",;!?")))
+            proxy?.insertText(trailing)
+            undoCorrection = nil
+            afterCommit()
+            return
+        }
 
         if !word.isEmpty {
             if store.macroAutoExpand, let macro = store.macros.first(where: { !$0.shortcut.isEmpty && $0.shortcut.lowercased() == word.lowercased() }) {
@@ -540,6 +616,17 @@ final class KeyboardState: ObservableObject {
         if composeMode || (panel != .none && panel != .tools) { return }
         let word = currentWord
         var list: [Suggestion] = []
+        let token = currentToken
+        for t in engine.tokenCompletions(prefix: token) {
+            list.append(Suggestion(text: t, kind: .token))
+        }
+        if tokenIsSpecial && !token.isEmpty {
+            // In Adressen keine Wortvorschläge/Korrekturen
+            let newList = Array(list.prefix(3))
+            if newList.map(\.text) != suggestions.map(\.text) { suggestions = newList }
+            aiPhrase = nil
+            return
+        }
 
         if !word.isEmpty {
             if let macro = store.macros.first(where: { !$0.shortcut.isEmpty && $0.shortcut.lowercased() == word.lowercased() }) {
@@ -553,7 +640,7 @@ final class KeyboardState: ObservableObject {
                 list.append(Suggestion(text: c, kind: .word))
             }
         } else {
-            for p in engine.predictions(after: previousWord, limit: 3) {
+            for p in engine.predictions(after: previousWord, prev2: secondPreviousWord, limit: 3) {
                 list.append(Suggestion(text: p, kind: .word))
             }
         }
@@ -618,15 +705,14 @@ final class KeyboardState: ObservableObject {
         }
         // Lokale Vorschläge auffüllen
         for s in suggestions where !merged.contains(where: { $0.text == s.text }) { merged.append(s) }
-        let phraseText = p.phrase
-        let limit = phraseText.isEmpty ? 3 : 2
-        suggestions = Array(merged.prefix(limit))
-        if phraseText.isEmpty {
-            aiPhrase = nil
-        } else {
-            let rest = word.isEmpty ? "" : p.rest
-            aiPhrase = Suggestion(text: phraseText, kind: .phrase, display: rest.isEmpty ? phraseText : "…" + rest + " " + phraseText, rest: rest)
+        let phraseTexts = p.phrases.isEmpty ? (p.phrase.isEmpty ? [] : [p.phrase]) : p.phrases
+        // Mit Satzfortsetzungen wird die Leiste scrollbar – dann mehr Wörter zeigen
+        suggestions = Array(merged.prefix(phraseTexts.isEmpty ? 3 : 6))
+        let rest = word.isEmpty ? "" : p.rest
+        let newPhrases = phraseTexts.map { text in
+            Suggestion(text: text, kind: .phrase, display: rest.isEmpty ? text : "…" + rest + " " + text, rest: rest)
         }
+        if newPhrases.map(\.text) != bar.phrases.map(\.text) { bar.phrases = newPhrases }
     }
 
     func pickSuggestion(_ s: Suggestion) {
@@ -640,6 +726,12 @@ final class KeyboardState: ObservableObject {
         case .typed:
             engine.learn(word: s.text, previous: previousWord, weight: 2)
             proxy?.insertText(" ")
+            undoCorrection = nil
+            afterCommit()
+        case .token:
+            deleteChars(currentToken.count)
+            proxy?.insertText(s.text + " ")
+            engine.learnToken(s.text)
             undoCorrection = nil
             afterCommit()
         case .phrase:
@@ -1364,6 +1456,44 @@ final class KeyboardState: ObservableObject {
             t = t.replacingOccurrences(of: " *\n *", with: "\n", options: .regularExpression)
             return t.trimmingCharacters(in: .whitespacesAndNewlines)
         }
+    }
+
+    // MARK: - Design aus der Tastatur
+
+    /// Setzt ein kopiertes Bild als Hintergrund (Tastaturen dürfen die Fotomediathek nicht öffnen).
+    func setBackgroundFromClipboard() {
+        guard hasFullAccess else {
+            showToast("Dafür „Vollen Zugriff“ erlauben.")
+            return
+        }
+        let pb = UIPasteboard.general
+        let types = ["public.heic", "public.jpeg", "public.png", "public.tiff", "com.compuserve.gif", "public.image"]
+        var raw: Data?
+        for t in types {
+            if let d = pb.data(forPasteboardType: t) { raw = d; break }
+        }
+        if raw == nil, pb.hasImages, let img = pb.image { raw = img.jpegData(compressionQuality: 0.9) }
+        guard let data = raw else {
+            showToast("Kopiere zuerst ein Bild (Fotos → Teilen → Kopieren).")
+            return
+        }
+        showToast("Bild wird gesetzt …")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let jpeg = Theme.downsampledJPEG(from: data, maxPixel: 1100)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                guard let jpeg else { self.showToast("Bild konnte nicht gelesen werden."); return }
+                self.store.saveBackgroundImage(jpeg)
+                self.store.themeID = ""
+                self.showToast("Hintergrund gesetzt ✓")
+            }
+        }
+    }
+
+    func randomTheme() {
+        ThemePreset.random().apply(to: store)
+        feedback(.medium)
+        showToast("🎲 Neuer Look")
     }
 
     // MARK: - Emojis

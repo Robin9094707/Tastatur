@@ -20,6 +20,18 @@ struct AppearanceView: View {
                     CardHeader(title: "Themes", symbol: "swatchpalette", subtitle: "Komplett-Looks mit einem Tipp")
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 12) {
+                            Button {
+                                withAnimation(.snappy) { ThemePreset.random().apply(to: store) }
+                                keyColor = Theme.color(hex: store.keyColorHex)
+                            } label: {
+                                VStack(spacing: 6) {
+                                    Image(systemName: "dice.fill").font(.title)
+                                        .frame(width: 92, height: 64)
+                                        .glass(cornerRadius: 14, interactive: true)
+                                    Text("Überrasch mich").font(.caption2.weight(.semibold))
+                                }
+                            }
+                            .buttonStyle(.plain)
                             ForEach(ThemePreset.all) { theme in
                                 Button {
                                     withAnimation(.snappy) { theme.apply(to: store) }
@@ -292,45 +304,3 @@ struct KeyboardPreview: View {
     }
 }
 
-/// Kleine Vorschau eines Themes.
-struct ThemeThumbnail: View {
-    let theme: ThemePreset
-
-    var body: some View {
-        let dark = theme.backgroundStyle == "system" ? true : (theme.backgroundStyle == "gradient" ? theme.backgroundPreset != 5 : KeyStyleKit.luminance(Theme.uiColor(hex: theme.backgroundColorHex)) < 0.6)
-        let c = KeyStyleKit.colors(style: theme.keyStyle, dark: dark, tint: UIColor(Theme.tint(theme.tint)),
-                                   keyColor: Theme.uiColor(hex: theme.keyColorHex),
-                                   textColor: theme.textColorHex.isEmpty ? nil : Theme.uiColor(hex: theme.textColorHex),
-                                   opacity: theme.opacity)
-        ZStack {
-            background
-            VStack(spacing: 4) {
-                ForEach(0..<3, id: \.self) { _ in
-                    HStack(spacing: 3) {
-                        ForEach(0..<6, id: \.self) { _ in
-                            RoundedRectangle(cornerRadius: c.capsule ? 5 : min(theme.radius / 3, 4), style: .continuous)
-                                .fill(Color(uiColor: c.fill))
-                                .overlay(RoundedRectangle(cornerRadius: c.capsule ? 5 : min(theme.radius / 3, 4), style: .continuous)
-                                    .strokeBorder(Color(uiColor: c.border), lineWidth: c.borderWidth * 0.6))
-                                .frame(height: 12)
-                        }
-                    }
-                }
-            }
-            .padding(8)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-
-    @ViewBuilder
-    private var background: some View {
-        switch theme.backgroundStyle {
-        case "gradient":
-            LinearGradient(colors: Theme.backgroundPresets[min(theme.backgroundPreset, Theme.backgroundPresets.count - 1)].colors, startPoint: .topLeading, endPoint: .bottomTrailing)
-        case "color":
-            Theme.color(hex: theme.backgroundColorHex)
-        default:
-            LinearGradient(colors: [Color(white: 0.16), Color(white: 0.10)], startPoint: .top, endPoint: .bottom)
-        }
-    }
-}

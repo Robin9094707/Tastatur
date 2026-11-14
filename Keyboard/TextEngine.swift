@@ -22,11 +22,15 @@ final class TextEngine {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let words = store.loadLearnedWords()
             let grams = Self.loadBigrams()
+            let toks: [String: Int] = Self.loadJSON("tokens.json") ?? [:]
+            let tris: [String: [String: Int]] = Self.loadJSON("trigrams.json") ?? [:]
             DispatchQueue.main.async {
                 guard let self else { return }
                 // bereits in dieser Sitzung Gelerntes behalten
                 for (k, v) in words { self.learned[k, default: 0] += v }
                 for (k, v) in grams { self.bigrams[k] = (self.bigrams[k] ?? [:]).merging(v, uniquingKeysWith: +) }
+                for (k, v) in toks { self.tokens[k, default: 0] += v }
+                for (k, v) in tris { self.trigrams[k] = (self.trigrams[k] ?? [:]).merging(v, uniquingKeysWith: +) }
                 self.loaded = true
                 self.buildPrefixes()
             }
@@ -134,11 +138,15 @@ final class TextEngine {
         return result.prefix(limit).map { matchCase(of: prefix, $0) }
     }
 
-    func predictions(after previousWord: String?, limit: Int) -> [String] {
-        guard let prev = previousWord?.lowercased(), let next = bigrams[prev], !next.isEmpty else {
-            return []
+    func predictions(after previousWord: String?, prev2: String? = nil, limit: Int) -> [String] {
+        var result: [String] = []
+        if let p1 = previousWord?.lowercased(), let p2 = prev2?.lowercased(), let next = trigrams[p2 + " " + p1] {
+            for (w, c) in next.sorted(by: { $0.value > $1.value }) where c >= 2 && result.count < limit { result.append(w) }
         }
-        return next.sorted { $0.value > $1.value }.prefix(limit).map(\.key)
+        if let prev = previousWord?.lowercased(), let next = bigrams[prev] {
+            for (w, _) in next.sorted(by: { $0.value > $1.value }) where result.count < limit && !result.contains(w) { result.append(w) }
+        }
+        return result
     }
 
     private func matchCase(of prefix: String, _ word: String) -> String {
@@ -212,12 +220,85 @@ final class TextEngine {
                 bigrams[prev] = Dictionary(uniqueKeysWithValues: top.map { ($0.key, $0.value) })
             }
         }
+        // Dreier-Folgen: „ich bin gleich“ → „da“
+        if let prev = previous?.lowercased(), history.count >= 2, history[history.count - 1].lowercased() == prev {
+            let key = history[history.count - 2].lowercased() + " " + prev
+            trigrams[key, default: [:]][word, default: 0] += weight
+            if let c = trigrams[key]?.count, c > 20 {
+                let top = trigrams[key]!.sorted { $0.value > $1.value }.prefix(12)
+                trigrams[key] = Dictionary(uniqueKeysWithValues: top.map { ($0.key, $0.value) })
+            }
+        }
+        if previous == nil { history.removeAll() }
+        history.append(word)
+        if history.count > 3 { history.removeFirst() }
         dirty += 1
         if dirty >= 15 { save() }
     }
 
-    func save() {
-        guard dirty > 0, loaded else { return }
+    // MARK: - Persönliche Einträge (E-Mail, Links, Nummern, @Namen)
+
+    private var tokens: [String: Int] = [:]
+    private var trigrams: [String: [String: Int]] = [:]
+    private var history: [String] = []
+
+    static func isPersonalToken(_ t: String) -> Bool {
+        guard t.count >= 4, t.count <= 120, !t.contains(" ") else { return false }
+        let lower = t.lowercased()
+        if lower.range(of: #"^[^@\s]+@[^@\s]+\.[a-z]{2,}$"#, options: .regularExpression) != nil { return true } // E-Mail
+        if lower.hasPrefix("http://") || lower.hasPrefix("https://") || lower.hasPrefix("www.") { return true }
+        if lower.range(of: #"^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}(/\S*)?$"#, options: .regularExpression) != nil { return true } // Domain
+        if t.hasPrefix("@") && t.count >= 3 { return true } // @Name
+        let digits = t.filter(\.isNumber).count
+        if digits >= 6, t.allSatisfy({ $0.isNumber || "+-/() ".contains($0) }) { return true } // Telefon
+        if digits >= 2, t.rangeOfCharacter(from: .letters) != nil, t.count >= 6, t.allSatisfy({ $0.isLetter || $0.isNumber || "-_.".contains($0) }) {
+            return true // z. B. Kennungen, Kundennummern
+        }
+        return false
+    }
+
+    func learnToken(_ t: String) {
+        guard store.learnWords, Self.isPersonalToken(t) else { return }
+        tokens[t, default: 0] += 1
+        if tokens.count > 400 {
+            tokens = Dictionary(uniqueKeysWithValues: tokens.sorted { $0.value > $1.value }.prefix(300).map { ($0.key, $0.value) })
+        }
+        dirty += 1
+        if dirty >= 15 { save() }
+    }
+
+    /// Persönliche Einträge, die zum angefangenen Text passen.
+    func tokenCompletions(prefix: String, limit: Int = 2) -> [String] {
+        guard prefix.count >= 2 else { return [] }
+        let lp = prefix.lowercased()
+        return tokens
+            .filter { $0.key.lowercased().hasPrefix(lp) && $0.key.count > prefix.count && ($0.value >= 2 || prefix.count >= 3) }
+            .sorted { $0.value > $1.value }
+            .prefix(limit)
+            .map(\.key)
+    }
+
+    var allTokens: [(String, Int)] { tokens.sorted { $0.value > $1.value }.map { ($0.key, $0.value) } }
+
+    func forgetToken(_ t: String) {
+        tokens[t] = nil
+        dirty += 1
+        save(force: true)
+    }
+
+    private static func loadJSON<T: Decodable>(_ name: String) -> T? {
+        guard let data = try? Data(contentsOf: SharedStore.containerURL.appendingPathComponent(name)) else { return nil }
+        return try? JSONDecoder().decode(T.self, from: data)
+    }
+
+    private static func saveJSON<T: Encodable>(_ value: T, _ name: String) {
+        if let data = try? JSONEncoder().encode(value) {
+            try? data.write(to: SharedStore.containerURL.appendingPathComponent(name), options: .atomic)
+        }
+    }
+
+    func save(force: Bool = false) {
+        guard (dirty > 0 || force), loaded else { return }
         dirty = 0
         if learned.count > 5000 {
             learned = Dictionary(uniqueKeysWithValues: learned.sorted { $0.value > $1.value }.prefix(4000).map { ($0.key, $0.value) })
@@ -225,8 +306,18 @@ final class TextEngine {
         if bigrams.count > 3000 {
             bigrams = Dictionary(uniqueKeysWithValues: bigrams.sorted { $0.value.values.reduce(0, +) > $1.value.values.reduce(0, +) }.prefix(2500).map { ($0.key, $0.value) })
         }
-        store.saveLearnedWords(learned)
-        Self.saveBigrams(bigrams)
+        if trigrams.count > 3000 {
+            trigrams = Dictionary(uniqueKeysWithValues: trigrams.sorted { $0.value.values.reduce(0, +) > $1.value.values.reduce(0, +) }.prefix(2500).map { ($0.key, $0.value) })
+        }
+        // Schreiben im Hintergrund – blockiert das Tippen nicht
+        let w = learned, b = bigrams, t = tokens, tr = trigrams
+        let store = self.store
+        DispatchQueue.global(qos: .utility).async {
+            store.saveLearnedWords(w)
+            Self.saveBigrams(b)
+            Self.saveJSON(t, "tokens.json")
+            Self.saveJSON(tr, "trigrams.json")
+        }
     }
 
     private static var bigramURL: URL { SharedStore.containerURL.appendingPathComponent("bigrams.json") }

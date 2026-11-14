@@ -1,5 +1,6 @@
 import UIKit
 import SwiftUI
+import Combine
 
 enum KeyKind: Equatable {
     case char(String)
@@ -310,6 +311,7 @@ final class AlternatesView: UIView {
 /// Komplettes Tastenfeld in UIKit: schnelles Multitouch, keine toten Zonen, Vorschau-Ballons.
 final class KeysView: UIView {
     weak var state: KeyboardState?
+    var cancellables = Set<AnyCancellable>()
     private var config: KeysConfig?
     private var keys: [KeyCapView] = []
     private var rowsSpec: [[(KeyKind, Width)]] = []
@@ -419,6 +421,7 @@ final class KeysView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        if let st = state { rowHeight = st.keyRowHeight }
         guard !rowsSpec.isEmpty else { return }
         let width = bounds.width - 6
         var y: CGFloat = 4
@@ -666,26 +669,52 @@ final class KeysView: UIView {
     }
 }
 
-/// Bindet das UIKit-Tastenfeld in SwiftUI ein.
+/// Bindet das UIKit-Tastenfeld in SwiftUI ein – ohne SwiftUI-Beobachtung:
+/// Das Tastenfeld abonniert seine Daten selbst und aktualisiert sich direkt.
 struct KeysRepresentable: UIViewRepresentable {
-    @ObservedObject var state: KeyboardState
-    @ObservedObject var store = SharedStore.shared
+    let state: KeyboardState
 
     func makeUIView(context: Context) -> KeysView {
         let v = KeysView()
-        v.state = state
+        v.bind(to: state)
         return v
     }
 
-    func updateUIView(_ v: KeysView, context: Context) {
-        v.state = state
-        v.apply(KeysConfig(layer: state.layer, shift: state.shift, returnTitle: state.returnTitle,
-                           needsGlobe: state.needsGlobe, numberRow: store.showNumberRow,
-                           tintIndex: store.keyboardTint, popups: store.keyPopups,
-                           keyOpacity: CGFloat(store.keyOpacity), cornerRadius: CGFloat(store.keyCornerRadius),
-                           fontScale: CGFloat(store.keyFontScale), forceDark: Theme.backgroundIsDark(store),
-                           style: store.keyStyle, keyColorHex: store.keyColorHex,
-                           textColorHex: store.keyTextColorHex, fontDesign: store.keyFontDesign),
-                rowHeight: state.keyRowHeight)
+    func updateUIView(_ v: KeysView, context: Context) {}
+}
+
+extension KeysView {
+    func bind(to state: KeyboardState) {
+        self.state = state
+        let km = state.keyModel
+        let store = state.store
+        cancellables.removeAll()
+        // Sofort (ohne Umweg über SwiftUI) auf Umschalt-/Ebenenwechsel reagieren
+        Publishers.CombineLatest4(km.$layer, km.$shift, km.$returnTitle, km.$needsGlobe)
+            .sink { [weak self, weak state] layer, shift, title, globe in
+                guard let self, let state else { return }
+                self.apply(KeysView.makeConfig(store: store, layer: layer, shift: shift, returnTitle: title, needsGlobe: globe),
+                           rowHeight: state.keyRowHeight)
+            }
+            .store(in: &cancellables)
+        // Design-Änderungen (seltener) gesammelt im nächsten Durchlauf übernehmen
+        store.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self, weak state] _ in
+                guard let self, let state else { return }
+                self.apply(KeysView.makeConfig(store: store, layer: km.layer, shift: km.shift, returnTitle: km.returnTitle, needsGlobe: km.needsGlobe),
+                           rowHeight: state.keyRowHeight)
+            }
+            .store(in: &cancellables)
+    }
+
+    static func makeConfig(store: SharedStore, layer: KeyboardLayer, shift: ShiftState, returnTitle: String, needsGlobe: Bool) -> KeysConfig {
+        KeysConfig(layer: layer, shift: shift, returnTitle: returnTitle,
+                   needsGlobe: needsGlobe, numberRow: store.showNumberRow,
+                   tintIndex: store.keyboardTint, popups: store.keyPopups,
+                   keyOpacity: CGFloat(store.keyOpacity), cornerRadius: CGFloat(store.keyCornerRadius),
+                   fontScale: CGFloat(store.keyFontScale), forceDark: Theme.backgroundIsDark(store),
+                   style: store.keyStyle, keyColorHex: store.keyColorHex,
+                   textColorHex: store.keyTextColorHex, fontDesign: store.keyFontDesign)
     }
 }

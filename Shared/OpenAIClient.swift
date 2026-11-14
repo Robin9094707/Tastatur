@@ -198,6 +198,7 @@ final class OpenAIClient {
         var rest: String
         var phrase: String
         var words: [String]
+        var phrases: [String] = []
     }
 
     /// KI-Autovervollständigung: Rest des aktuellen Wortes, nächste Wörter und eine Satzfortsetzung.
@@ -205,10 +206,10 @@ final class OpenAIClient {
         let raw = try await chat(messages: [
             ChatMessage(role: "system", content: """
             Du bist die Autovervollständigung einer Smartphone-Tastatur. Sage voraus, wie der Nutzer weiterschreibt – natürlich, in seiner Sprache und seinem Ton.
-            Antworte NUR mit kompaktem JSON: {"rest":"…","words":["…","…","…"],"phrase":"…"}
+            Antworte NUR mit kompaktem JSON: {"rest":"…","words":["…","…","…","…"],"phrases":["…","…"]}
             - "rest": Falls das letzte Wort unvollständig ist, die fehlenden Buchstaben (ohne Leerzeichen), sonst "".
-            - "words": 3 verschiedene wahrscheinliche nächste Einzelwörter (bzw. Vervollständigungen des angefangenen Wortes als ganzes Wort).
-            - "phrase": die wahrscheinlichste Fortsetzung mit 2–7 Wörtern NACH dem aktuellen Wort (ohne führendes Leerzeichen), oder "".
+            - "words": 4 verschiedene wahrscheinliche nächste Einzelwörter (bzw. Vervollständigungen des angefangenen Wortes als ganzes Wort).
+            - "phrases": 2 unterschiedliche natürliche Fortsetzungen mit je 2–8 Wörtern NACH dem aktuellen Wort (ohne führendes Leerzeichen), die beste zuerst.
             """ + (store.writingStyle.isEmpty ? "" : "\nSchreibstil des Nutzers: \(store.writingStyle)")),
             ChatMessage(role: "user", content: String(context.suffix(600))),
         ], model: store.fastModel, stream: false, effort: "minimal")
@@ -218,9 +219,10 @@ final class OpenAIClient {
             return Prediction(rest: "", phrase: "", words: [])
         }
         let rest = (json["rest"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let phrase = (json["phrase"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        var phrases = (json["phrases"] as? [String] ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        if let single = json["phrase"] as? String, !single.isEmpty, !phrases.contains(single) { phrases.insert(single, at: 0) }
         let words = (json["words"] as? [String] ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty && !$0.contains(" ") }
-        return Prediction(rest: rest, phrase: phrase, words: Array(words.prefix(3)))
+        return Prediction(rest: rest, phrase: phrases.first ?? "", words: Array(words.prefix(4)), phrases: Array(phrases.prefix(2)))
     }
 
     struct TypoFix {

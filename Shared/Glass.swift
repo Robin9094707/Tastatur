@@ -121,7 +121,30 @@ extension Theme {
         ("Pfirsich", [Color(red: 0.98, green: 0.60, blue: 0.45), Color(red: 0.90, green: 0.40, blue: 0.60)]),
         ("Neon", [Color(red: 0.95, green: 0.10, blue: 0.60), Color(red: 0.10, green: 0.80, blue: 0.95)]),
         ("Graphit", [Color(white: 0.18), Color(white: 0.30)]),
+        ("Sakura", [Color(red: 1.0, green: 0.86, blue: 0.91), Color(red: 0.98, green: 0.70, blue: 0.80)]),
+        ("Lava", [Color(red: 0.35, green: 0.02, blue: 0.05), Color(red: 0.95, green: 0.35, blue: 0.10)]),
+        ("Polarlicht", [Color(red: 0.05, green: 0.25, blue: 0.30), Color(red: 0.20, green: 0.75, blue: 0.55), Color(red: 0.45, green: 0.25, blue: 0.70)]),
+        ("Gold", [Color(red: 0.30, green: 0.20, blue: 0.05), Color(red: 0.85, green: 0.65, blue: 0.25)]),
+        ("Matrix", [Color(red: 0.0, green: 0.05, blue: 0.0), Color(red: 0.0, green: 0.25, blue: 0.08)]),
+        ("Vaporwave", [Color(red: 0.98, green: 0.45, blue: 0.75), Color(red: 0.55, green: 0.35, blue: 0.95), Color(red: 0.25, green: 0.85, blue: 0.95)]),
+        ("Arktis", [Color(red: 0.88, green: 0.95, blue: 1.0), Color(red: 0.70, green: 0.85, blue: 0.97)]),
+        ("Espresso", [Color(red: 0.16, green: 0.10, blue: 0.07), Color(red: 0.40, green: 0.27, blue: 0.18)]),
     ]
+
+    /// Helle Verläufe (dunkle Schrift)
+    static let lightPresets: Set<Int> = [5, 8, 14]
+
+    /// Verkleinert ein Bild direkt aus den Rohdaten, ohne es voll zu dekodieren (wichtig in der Tastatur).
+    static func downsampledJPEG(from data: Data, maxPixel: Int = 1200) -> Data? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+        return UIImage(cgImage: cg).jpegData(compressionQuality: 0.82)
+    }
 
     static func color(hex: String) -> Color {
         Color(uiColor: uiColor(hex: hex))
@@ -144,7 +167,7 @@ extension Theme {
     static func backgroundIsDark(_ store: SharedStore) -> Bool? {
         switch store.backgroundStyle {
         case "gradient":
-            return store.backgroundPreset != 5
+            return !lightPresets.contains(store.backgroundPreset)
         case "color":
             var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
             uiColor(hex: store.backgroundColorHex).getRed(&r, green: &g, blue: &b, alpha: &a)

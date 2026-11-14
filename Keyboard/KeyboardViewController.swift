@@ -64,6 +64,23 @@ final class KeyboardViewController: UIInputViewController {
         if view.overrideUserInterfaceStyle != style { view.overrideUserInterfaceStyle = style }
     }
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        // iOS verzögert Berührungen am Bildschirmrand (System-Gesten). Für eine Tastatur
+        // bremst das die untere Reihe – deshalb abschalten, wie bei der Apple-Tastatur.
+        disableTouchDelays()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.disableTouchDelays() }
+    }
+
+    private func disableTouchDelays() {
+        var v: UIView? = view
+        while let current = v {
+            current.gestureRecognizers?.forEach { $0.delaysTouchesBegan = false }
+            v = current.superview
+        }
+        view.window?.gestureRecognizers?.forEach { $0.delaysTouchesBegan = false }
+    }
+
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         state?.disappear()

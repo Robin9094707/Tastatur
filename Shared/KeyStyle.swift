@@ -169,7 +169,29 @@ struct ThemePreset: Identifiable {
         ThemePreset(id: "minimal", name: "Minimal", backgroundStyle: "gradient", backgroundPreset: 7, backgroundColorHex: "#000000", keyStyle: .minimal, keyColorHex: "#FFFFFF", textColorHex: "", tint: 5, font: "default", radius: 8, opacity: 1),
         ThemePreset(id: "paper", name: "Papier", backgroundStyle: "color", backgroundPreset: 0, backgroundColorHex: "#EFE8DC", keyStyle: .solid, keyColorHex: "#FBF8F2", textColorHex: "#3B3227", tint: 3, font: "serif", radius: 6, opacity: 1),
         ThemePreset(id: "candy", name: "Candy", backgroundStyle: "gradient", backgroundPreset: 6, backgroundColorHex: "#000000", keyStyle: .bubble, keyColorHex: "#FFFFFF", textColorHex: "#C2185B", tint: 4, font: "rounded", radius: 20, opacity: 1),
+        ThemePreset(id: "sakura", name: "Sakura", backgroundStyle: "gradient", backgroundPreset: 8, backgroundColorHex: "#000000", keyStyle: .glass, keyColorHex: "#FFFFFF", textColorHex: "#8E2450", tint: 4, font: "rounded", radius: 14, opacity: 0.9),
+        ThemePreset(id: "lava", name: "Lava", backgroundStyle: "gradient", backgroundPreset: 9, backgroundColorHex: "#000000", keyStyle: .neon, keyColorHex: "#000000", textColorHex: "", tint: 3, font: "default", radius: 8, opacity: 1),
+        ThemePreset(id: "polar", name: "Polarlicht", backgroundStyle: "gradient", backgroundPreset: 10, backgroundColorHex: "#000000", keyStyle: .glass, keyColorHex: "#FFFFFF", textColorHex: "", tint: 2, font: "rounded", radius: 12, opacity: 0.7),
+        ThemePreset(id: "gold", name: "Gold", backgroundStyle: "gradient", backgroundPreset: 11, backgroundColorHex: "#000000", keyStyle: .outline, keyColorHex: "#FFFFFF", textColorHex: "#FFE7A8", tint: 3, font: "serif", radius: 6, opacity: 1),
+        ThemePreset(id: "matrix", name: "Matrix", backgroundStyle: "gradient", backgroundPreset: 12, backgroundColorHex: "#000000", keyStyle: .minimal, keyColorHex: "#000000", textColorHex: "#39FF7A", tint: 2, font: "mono", radius: 4, opacity: 1),
+        ThemePreset(id: "vapor", name: "Vaporwave", backgroundStyle: "gradient", backgroundPreset: 13, backgroundColorHex: "#000000", keyStyle: .bubble, keyColorHex: "#2A1B4D", textColorHex: "#FFFFFF", tint: 4, font: "rounded", radius: 20, opacity: 0.85),
+        ThemePreset(id: "arctic", name: "Arktis", backgroundStyle: "gradient", backgroundPreset: 14, backgroundColorHex: "#000000", keyStyle: .classic, keyColorHex: "#FFFFFF", textColorHex: "#1B3A57", tint: 1, font: "default", radius: 9, opacity: 0.95),
+        ThemePreset(id: "espresso", name: "Espresso", backgroundStyle: "gradient", backgroundPreset: 15, backgroundColorHex: "#000000", keyStyle: .solid, keyColorHex: "#5A3D2B", textColorHex: "#F5E6D3", tint: 3, font: "serif", radius: 8, opacity: 1),
+        ThemePreset(id: "obsidian", name: "Obsidian", backgroundStyle: "color", backgroundPreset: 0, backgroundColorHex: "#0B0B0F", keyStyle: .glass, keyColorHex: "#FFFFFF", textColorHex: "", tint: 0, font: "default", radius: 10, opacity: 0.7),
     ]
+
+    /// Zufälliger, aber stimmiger Look.
+    static func random() -> ThemePreset {
+        let styles = KeyStyle.allCases
+        let bg = Int.random(in: 0..<Theme.backgroundPresets.count)
+        let style = styles.randomElement() ?? .glass
+        let colors = ["#FFFFFF", "#2A1B4D", "#FFF4EC", "#2E5E43", "#1E2A44", "#5A3D2B", "#F0E6FF"]
+        return ThemePreset(id: "random-\(UUID().uuidString.prefix(6))", name: "Zufall", backgroundStyle: "gradient", backgroundPreset: bg,
+                           backgroundColorHex: "#000000", keyStyle: style, keyColorHex: colors.randomElement() ?? "#FFFFFF",
+                           textColorHex: "", tint: Int.random(in: 0..<Theme.tints.count),
+                           font: ["default", "rounded", "serif", "mono"].randomElement() ?? "default",
+                           radius: [5, 8, 10, 12, 16].randomElement() ?? 9, opacity: [0.7, 0.85, 1].randomElement() ?? 1)
+    }
 
     func apply(to store: SharedStore) {
         store.backgroundStyle = backgroundStyle
@@ -183,5 +205,48 @@ struct ThemePreset: Identifiable {
         store.keyCornerRadius = radius
         store.keyOpacity = opacity
         store.themeID = id
+    }
+}
+
+/// Kleine Vorschau eines Themes.
+struct ThemeThumbnail: View {
+    let theme: ThemePreset
+
+    var body: some View {
+        let dark = theme.backgroundStyle == "system" ? true : (theme.backgroundStyle == "gradient" ? !Theme.lightPresets.contains(theme.backgroundPreset) : KeyStyleKit.luminance(Theme.uiColor(hex: theme.backgroundColorHex)) < 0.6)
+        let c = KeyStyleKit.colors(style: theme.keyStyle, dark: dark, tint: UIColor(Theme.tint(theme.tint)),
+                                   keyColor: Theme.uiColor(hex: theme.keyColorHex),
+                                   textColor: theme.textColorHex.isEmpty ? nil : Theme.uiColor(hex: theme.textColorHex),
+                                   opacity: theme.opacity)
+        ZStack {
+            background
+            VStack(spacing: 4) {
+                ForEach(0..<3, id: \.self) { _ in
+                    HStack(spacing: 3) {
+                        ForEach(0..<6, id: \.self) { _ in
+                            RoundedRectangle(cornerRadius: c.capsule ? 5 : min(theme.radius / 3, 4), style: .continuous)
+                                .fill(Color(uiColor: c.fill))
+                                .overlay(RoundedRectangle(cornerRadius: c.capsule ? 5 : min(theme.radius / 3, 4), style: .continuous)
+                                    .strokeBorder(Color(uiColor: c.border), lineWidth: c.borderWidth * 0.6))
+                                .frame(height: 12)
+                        }
+                    }
+                }
+            }
+            .padding(8)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    @ViewBuilder
+    private var background: some View {
+        switch theme.backgroundStyle {
+        case "gradient":
+            LinearGradient(colors: Theme.backgroundPresets[min(theme.backgroundPreset, Theme.backgroundPresets.count - 1)].colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+        case "color":
+            Theme.color(hex: theme.backgroundColorHex)
+        default:
+            LinearGradient(colors: [Color(white: 0.16), Color(white: 0.10)], startPoint: .top, endPoint: .bottom)
+        }
     }
 }

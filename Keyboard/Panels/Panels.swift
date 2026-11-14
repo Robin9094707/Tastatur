@@ -711,11 +711,43 @@ struct KeyboardSettingsPanel: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Themes").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
+                    Button { state.randomTheme() } label: {
+                        VStack(spacing: 3) {
+                            Image(systemName: "dice.fill").font(.title2).foregroundStyle(state.tint)
+                                .frame(width: 70, height: 48)
+                                .glass(cornerRadius: 10, interactive: true)
+                            Text("Überrasch mich").font(.system(size: 9, weight: .semibold)).lineLimit(1)
+                        }
+                    }
+                    .buttonStyle(.plain)
                     ForEach(ThemePreset.all) { t in
-                        chip(t.name, selected: store.themeID == t.id) { t.apply(to: store) }
+                        Button {
+                            state.feedback()
+                            t.apply(to: store)
+                        } label: {
+                            VStack(spacing: 3) {
+                                ThemeThumbnail(theme: t)
+                                    .frame(width: 70, height: 48)
+                                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .strokeBorder(.white, lineWidth: store.themeID == t.id ? 2.5 : 0))
+                                Text(t.name).font(.system(size: 9, weight: .semibold)).lineLimit(1)
+                            }
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
+            }
+            HStack {
+                actionButton("Bild aus Zwischenablage", "photo.on.rectangle") { state.setBackgroundFromClipboard() }
+                if store.backgroundStyle == "image" {
+                    actionButton("Bild entfernen", "xmark") { store.backgroundStyle = "system" }
+                }
+            }
+            if store.backgroundStyle == "image" {
+                stepper("Abdunkeln", "\(Int(store.backgroundDim * 100)) %",
+                        minus: { store.backgroundDim = max(0, store.backgroundDim - 0.1) },
+                        plus: { store.backgroundDim = min(0.8, store.backgroundDim + 0.1) })
             }
             Text("Tastenstil").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             ScrollView(.horizontal, showsIndicators: false) {
@@ -775,6 +807,13 @@ struct KeyboardSettingsPanel: View {
     }
 
     private var typingPage: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            typingToggles
+            LearnedTokensView(state: state)
+        }
+    }
+
+    private var typingToggles: some View {
         grid {
             toggle("Autokorrektur", "textformat.abc.dottedunderline", $store.autocorrect)
             toggle("Trefferzonen", "hand.point.up.braille", $store.smartTouch)
@@ -968,5 +1007,36 @@ struct KeyboardSettingsPanel: View {
             .glass(cornerRadius: 12, interactive: true)
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// Gelernte persönliche Einträge (E-Mails, Links, Nummern) – mit Löschen.
+struct LearnedTokensView: View {
+    @ObservedObject var state: KeyboardState
+    @State private var items: [(String, Int)] = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Gelernte Einträge").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            if items.isEmpty {
+                Text("Noch nichts gelernt. E-Mail-Adressen, Links und Nummern, die du öfter tippst, erscheinen hier und werden vorgeschlagen.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            ForEach(Array(items.prefix(30).enumerated()), id: \.offset) { _, item in
+                HStack {
+                    Text(item.0).font(.caption).lineLimit(1)
+                    Spacer()
+                    Text("\(item.1)×").font(.caption2).foregroundStyle(.secondary)
+                    Button {
+                        state.engine.forgetToken(item.0)
+                        items = state.engine.allTokens
+                    } label: { Image(systemName: "trash").foregroundStyle(.secondary) }
+                    .buttonStyle(.plain)
+                }
+                .padding(8)
+                .glass(cornerRadius: 10)
+            }
+        }
+        .onAppear { items = state.engine.allTokens }
     }
 }

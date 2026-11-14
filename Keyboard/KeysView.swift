@@ -193,8 +193,18 @@ final class KeyCapView: UIView {
         if case .delete = kind {
             icon.image = UIImage(systemName: pressed ? "delete.left.fill" : "delete.left", withConfiguration: UIImage.SymbolConfiguration(pointSize: 18))
         }
-        // Schneller Pfad: nur die Füllfarbe tauschen (keine Farb-/Schatten-Neuberechnung pro Tipp)
-        if let c = lastConfig, let colors = cachedColors { applyFill(colors, c) } else if let c = lastConfig { applyColors(config: c, dark: lastDark) }
+        // Schneller Pfad: nur die Füllfarbe tauschen (keine Farb-/Schatten-Neuberechnung pro Tipp).
+        // Drücken sofort, Loslassen mit kurzem Ausblenden – wie bei der iOS-Tastatur.
+        let apply = { [weak self] in
+            guard let self else { return }
+            if let c = self.lastConfig, let colors = self.cachedColors { self.applyFill(colors, c) } else if let c = self.lastConfig { self.applyColors(config: c, dark: self.lastDark) }
+        }
+        if pressed {
+            cap.layer.removeAnimation(forKey: "backgroundColor")
+            apply()
+        } else {
+            UIView.animate(withDuration: 0.14, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState, .curveEaseOut], animations: apply)
+        }
     }
 
     private func applyFill(_ colors: KeyColors, _ config: KeysConfig) {

@@ -45,6 +45,12 @@ final class BarModel: ObservableObject {
     @Published var offerFixes = false
     /// Angebot in der Leiste: Gelöschtes wiederherstellen, Termin speichern, Antworten …
     @Published var offer: BarOffer?
+    /// Frisch Kopiertes zum Einfügen (Text, Link, Bild mit Miniatur, Datei, Passwort).
+    @Published var clip: ClipPeek?
+    /// Vorschau beim Tippen ausgeblendet (kommt im leeren Feld zurück).
+    @Published var clipHidden = false
+    /// Anmeldefeld erkannt → „Passwörter“ anbieten.
+    @Published var login = false
 }
 
 /// Zustand, den nur das UIKit-Tastenfeld braucht.
@@ -144,7 +150,7 @@ final class KeyboardState: ObservableObject {
     enum ComposeTarget: Equatable {
         case ai, refine, translate, calc, mcCommand, apiKey, baseURL, chatModel, personalContext, writingStyle
         case macroShortcut, macroText, profileName, profileContext(UUID), actionTitle, actionPrompt
-        case aiBehavior, learnedProfile, actionEdit(UUID), discordAnnounce, memoryNote
+        case aiBehavior, learnedProfile, actionEdit(UUID), discordAnnounce, memoryNote, passwordAppURL
         case clipEdit(UUID), clipNew, clipRename(UUID), clipFolderNew, clipFolderRename(String), clipSearch
 
         var placeholder: String {
@@ -168,6 +174,7 @@ final class KeyboardState: ObservableObject {
             case .aiBehavior: return "Wie soll sich die KI verhalten? z. B. „Duze immer, kurz & locker“"
             case .learnedProfile: return "Was die KI über dich weiß …"
             case .memoryNote: return "Was soll sich die KI merken?"
+            case .passwordAppURL: return "URL-Schema der App, z. B. meineapp://"
             case .actionEdit: return "Neue Anweisung für die Aktion"
             case .discordAnnounce: return "Worum geht die Ankündigung?"
             case .clipEdit: return "Eintrag bearbeiten …"
@@ -195,6 +202,7 @@ final class KeyboardState: ObservableObject {
             case .actionTitle, .actionPrompt, .actionEdit: return "wand.and.stars"
             case .aiBehavior: return "slider.horizontal.below.square.and.square.filled"
             case .learnedProfile, .memoryNote: return "brain.head.profile"
+            case .passwordAppURL: return "key.fill"
             case .discordAnnounce: return "megaphone"
             case .clipEdit, .clipNew, .clipRename: return "doc.on.clipboard"
             case .clipFolderNew, .clipFolderRename: return "folder"
@@ -231,6 +239,7 @@ final class KeyboardState: ObservableObject {
     @Published var clips: [ClipItem] = []
     var lastChangeCount = -1
     private var clipTimer: Timer?
+    private var clipsLoaded = false
 
     // Tippen
     private var lastSpaceTime = Date.distantPast
@@ -283,13 +292,15 @@ final class KeyboardState: ObservableObject {
     func appear() {
         store.reload()
         if store.swipeTyping || store.tapCorrection { SwipeDecoder.shared.loadIfNeeded() }
-        sourceMode = store.aiScope
-        hasFullAccess = controller?.hasFullAccess ?? false
+        if sourceMode != store.aiScope { sourceMode = store.aiScope }
+        let full = controller?.hasFullAccess ?? false
+        if hasFullAccess != full { hasFullAccess = full }
         needsGlobe = controller?.needsInputModeSwitchKey ?? true
         store.reportKeyboardStatus(fullAccess: hasFullAccess)
         onHeightChange?(totalHeight)
         updateReturnKey()
         updateAutoShift()
+        updateLoginField()
         // Alles Schwere erst nach dem ersten Frame – die Tastatur erscheint sofort.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
             guard let self else { return }
@@ -331,6 +342,8 @@ final class KeyboardState: ObservableObject {
     func textDidChange() {
         if !wordTaps.isEmpty, wordTaps.count != currentWord.count { wordTaps = [] }
         updateReturnKey()
+        updateLoginField()
+        if bar.clipHidden { restoreClipPeekIfEmpty() }
         if !composeMode {
             updateAutoShift()
             scheduleRefresh()
@@ -534,6 +547,7 @@ final class KeyboardState: ObservableObject {
             return
         }
         undoCorrection = nil
+        if bar.clip != nil, !bar.clipHidden { bar.clipHidden = true }
         let startsWord = currentWord.isEmpty
         proxy?.insertText(output)
         if output.count == 1, output.first?.isLetter == true, layer == .letters {
@@ -1500,6 +1514,11 @@ final class KeyboardState: ObservableObject {
             guard !text.isEmpty else { return }
             store.memoryNotes.insert(String(text.prefix(300)), at: 0)
             showToast("Gemerkt 🧠")
+        case .passwordAppURL:
+            let u = text.replacingOccurrences(of: " ", with: "")
+            store.passwordAppURL = u
+            store.passwordApp = u.isEmpty ? "auto" : "custom"
+            showToast(u.isEmpty ? "Nur iOS-Autofill" : "Passwort-App gespeichert ✓")
         case .learnedProfile:
             store.learnedProfile = text
             showToast(text.isEmpty ? "Gelerntes Profil gelöscht" : "Profil gespeichert ✓")
@@ -1610,36 +1629,56 @@ final class KeyboardState: ObservableObject {
     // MARK: - Zwischenablage
 
     private func startClipboardWatch() {
-        guard hasFullAccess, store.clipboardEnabled else {
-            clips = store.loadClips()
+        guard hasFullAccess, store.clipboardEnabled || store.clipPeek else {
+            loadClipsOnce()
             return
         }
         checkClipboard()
         clipTimer?.invalidate()
-        clipTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+        let t = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.checkClipboard()
         }
+        t.tolerance = 0.3
+        RunLoop.main.add(t, forMode: .common)
+        clipTimer = t
     }
 
     private func checkClipboard() {
         let pb = UIPasteboard.general
         if pb.changeCount != lastChangeCount {
             lastChangeCount = pb.changeCount
-            if pb.hasStrings, let s = pb.string {
+            let types = pb.types
+            let secret = ClipPeek.isConcealed(types)
+            if !secret, pb.hasStrings, let s = pb.string {
                 // Kopplungscode aus der App: automatisch übernehmen, nie im Verlauf speichern
                 if ChatGPTAuth.isTransferCode(s) {
                     importChatGPTCode(s)
                     return
                 }
-                clips = store.addClip(s)
+                if store.clipboardEnabled { clips = store.addClip(s) }
                 clipboardDidChange(s)
-                return
             }
+            updateClipPeek(pb, types: types, secret: secret)
+            return
         }
-        if clips.isEmpty { clips = store.loadClips() }
+        // Vorschau läuft nach ein paar Minuten ab
+        if let c = bar.clip {
+            let seen = Date(timeIntervalSince1970: store.defaults.double(forKey: "peek.seen"))
+            if c.changeCount != pb.changeCount || Date().timeIntervalSince(seen) > ClipPeek.freshness { bar.clip = nil }
+        }
+        loadClipsOnce()
     }
 
-    func reloadClips() { clips = store.loadClips() }
+    /// Ablage nur einmal von der Festplatte laden – vorher wurde eine leere Ablage jede Sekunde
+    /// neu gelesen und neu gesetzt (zeichnete jedes Mal die ganze Oberfläche neu).
+    private func loadClipsOnce() {
+        guard !clipsLoaded else { return }
+        clipsLoaded = true
+        let list = store.loadClips()
+        if !list.isEmpty || !clips.isEmpty { clips = list }
+    }
+
+    func reloadClips() { clips = store.loadClips(); clipsLoaded = true }
 
     func pasteClip(_ item: ClipItem) {
         feedback()

@@ -385,6 +385,7 @@ struct ClipboardPanel: View {
                 }
             } else {
                 VStack(spacing: 5) {
+                    if state.clipQuery.isEmpty { CurrentClipCard(state: state) }
                     folderBar
                     actionBar
                     if let folder = confirmFolder { folderConfirm(folder) }
@@ -1178,12 +1179,42 @@ struct KeyboardSettingsPanel: View {
     private var typingPage: some View {
         VStack(alignment: .leading, spacing: 10) {
             typingToggles
+            clipAndPasswordSettings
             Text("Power-Tippen: „Lernende Zonen“ passt die Tasten an deine Finger an, „Tipp-Korrektur“ repariert Vertipper beim Leerzeichen über die echten Tipp-Positionen.")
                 .font(.caption2).foregroundStyle(.secondary)
             actionButton("Trefferzonen zurücksetzen", "scope") { state.resetTouchModel() }
             if store.haptics { hapticSettings }
             LearnedTokensView(state: state)
         }
+    }
+
+    /// Zwischenablage-Vorschau und Passwort-Hilfe.
+    private var clipAndPasswordSettings: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Kopiertes & Passwörter").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            grid {
+                toggle("Kopiertes oben", "doc.on.clipboard", $store.clipPeek)
+                toggle("Passwort-Hilfe", "key.fill", $store.passwordHelper)
+                toggle("Login → iOS-Tastatur", "globe", $store.loginAutoSwitch)
+            }
+            Text("Passwort-App").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    chip("Nur Autofill", selected: store.passwordApp == "auto") { store.passwordApp = "auto" }
+                    ForEach(PasswordApps.all) { app in
+                        chip(app.name, selected: store.passwordApp == app.id) { store.passwordApp = app.id }
+                    }
+                    chip(store.passwordApp == "custom" && !store.passwordAppURL.isEmpty ? store.passwordAppURL : "Eigene …",
+                         selected: store.passwordApp == "custom") {
+                        state.beginInput(.passwordAppURL, prefill: store.passwordAppURL)
+                    }
+                }
+            }
+            Text("Bei Anmeldefeldern erscheint oben „Passwörter“: Ein Tipp wechselt zur iOS-Tastatur, dort zeigt iOS deine Passwort-App zum Ausfüllen (Autofill). Tipp: In Einstellungen → Tastaturen „Deutsch“ direkt nach Tastatur KI anordnen. Kopierst du ein Passwort in der Passwort-App, steht es hier oben verdeckt zum Einsetzen bereit – und landet nie im Verlauf.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+        .padding(10)
+        .glass(cornerRadius: 12)
     }
 
     private var hapticSettings: some View {

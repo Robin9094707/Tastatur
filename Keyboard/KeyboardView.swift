@@ -97,7 +97,7 @@ struct Toolbar: View {
                         .frame(width: 38, height: 38)
                         .glass(cornerRadius: 19, interactive: true, force: true)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableStyle())
                 suggestionBar
                 if !bar.issues.isEmpty && !bar.offerFixes {
                     Button { state.toggle(.check) } label: {
@@ -108,7 +108,7 @@ struct Toolbar: View {
                         .frame(width: 30, height: 30)
                         .frame(width: 34, height: 38)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableStyle())
                     .transition(.scale.combined(with: .opacity))
                 }
                 circleButton("wand.and.stars", active: false) { state.toggle(.ai) }
@@ -134,7 +134,7 @@ struct Toolbar: View {
                             .frame(height: 30)
                             .glassCapsule(interactive: true)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableStyle())
                 }
                 if state.panel == .ai || state.panel == .clipboard {
                     circleButton("pencil.line", active: false) { state.startCompose() }
@@ -181,15 +181,21 @@ struct Toolbar: View {
                         .frame(maxWidth: .infinity, minHeight: 32)
                         .background(Capsule().fill(Color.green.gradient))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableStyle())
                     Button { state.toggle(.check) } label: {
                         Image(systemName: "eye").font(.system(size: 14, weight: .semibold))
                             .frame(width: 32, height: 32)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableStyle())
                 }
                 .padding(.horizontal, 4)
                 .transition(.move(edge: .top).combined(with: .opacity))
+            } else if let peek = bar.clip, !bar.clipHidden, bar.liveFix == nil, !(bar.login && peek.kind != .secret) {
+                ClipPeekRow(state: state, peek: peek, replies: isReplyOffer)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            } else if bar.login, bar.liveFix == nil {
+                LoginRow(state: state)
+                    .transition(.move(edge: .top).combined(with: .opacity))
             } else if let offer = bar.offer, bar.liveFix == nil {
                 HStack(spacing: 6) {
                     Button { state.performOffer(offer) } label: {
@@ -203,13 +209,13 @@ struct Toolbar: View {
                         .frame(maxWidth: .infinity, minHeight: 32)
                         .background(Capsule().fill(state.tint.gradient))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableStyle())
                     Button { state.dismissOffer() } label: {
                         Image(systemName: "xmark").font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(.secondary)
                             .frame(width: 30, height: 32)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableStyle())
                 }
                 .padding(.horizontal, 4)
                 .transition(.move(edge: .top).combined(with: .opacity))
@@ -228,7 +234,7 @@ struct Toolbar: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableStyle())
                 .transition(.move(edge: .top).combined(with: .opacity))
             } else if bar.suggestions.isEmpty && bar.phrases.isEmpty {
                 HStack {
@@ -278,7 +284,10 @@ struct Toolbar: View {
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: bar.issues.count)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: bar.offerFixes)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: bar.offer)
-        .padding(.trailing, state.store.aiSuggestMode != "off" && bar.liveFix == nil && bar.offer == nil ? 36 : 0)
+        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: bar.clip)
+        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: bar.clipHidden)
+        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: bar.login)
+        .padding(.trailing, showsThinkButton ? 36 : 0)
         .frame(height: 38)
         .frame(maxWidth: .infinity)
         .overlay(alignment: .trailing) { thinkButton }
@@ -286,9 +295,23 @@ struct Toolbar: View {
     }
 
     /// „KI denk mit“ – Vorschläge nur auf Knopfdruck (spart Anfragen).
+    /// Eine eigene Zeile (Angebot, Kopiertes, Passwörter) belegt die ganze Leiste.
+    private var rowTakesBar: Bool {
+        bar.offer != nil || (bar.clip != nil && !bar.clipHidden) || bar.login
+    }
+
+    private var showsThinkButton: Bool {
+        state.store.aiSuggestMode != "off" && bar.liveFix == nil && !rowTakesBar
+    }
+
+    private var isReplyOffer: Bool {
+        if case .replies = bar.offer?.kind { return true }
+        return false
+    }
+
     @ViewBuilder
     private var thinkButton: some View {
-        if state.store.aiSuggestMode != "off", bar.liveFix == nil, bar.offer == nil {
+        if showsThinkButton {
             Button { state.predictNow() } label: {
                 Image(systemName: "sparkles")
                     .font(.system(size: 13, weight: .bold))
@@ -298,7 +321,7 @@ struct Toolbar: View {
                     .background(Circle().fill(state.tint.gradient))
                     .padding(.trailing, 4)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableStyle())
         }
     }
 
@@ -317,7 +340,7 @@ struct Toolbar: View {
             .background(Capsule().fill(state.tint.opacity(0.30)))
             .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableStyle())
         .transition(.opacity.combined(with: .scale(scale: 0.95)))
     }
 
@@ -344,7 +367,7 @@ struct Toolbar: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableStyle())
         label
     }
 
@@ -376,7 +399,7 @@ struct Toolbar: View {
                         Button { state.pasteIntoCompose() } label: {
                             Image(systemName: "doc.on.clipboard").font(.system(size: 13, weight: .semibold))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(PressableStyle())
                     }
                 }
                 .font(.subheadline)
@@ -429,7 +452,7 @@ struct Toolbar: View {
                 .frame(width: 32, height: 32)
                 .glass(cornerRadius: 16, interactive: true, force: true)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableStyle())
     }
 
     /// Zweizeilige Übersetzungsleiste: oben deine Eingabe, unten die Live-Übersetzung.
@@ -450,7 +473,7 @@ struct Toolbar: View {
                     .frame(height: 38)
                     .glassCapsule(tint: state.tint.opacity(0.4), interactive: true, force: true)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableStyle())
                 HStack {
                     Text(state.composeText.isEmpty ? "Tippe in deiner Sprache …" : state.composeText)
                         .foregroundStyle(state.composeText.isEmpty ? .secondary : .primary)
@@ -475,7 +498,7 @@ struct Toolbar: View {
                                 .padding(.horizontal, 10).frame(height: 34)
                                 .glassCapsule(interactive: true)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(PressableStyle())
                         ForEach(Languages.all, id: \.name) { lang in
                             Button { state.setTranslateTarget(lang.name) } label: {
                                 Text("\(lang.flag) \(lang.name)")
@@ -484,7 +507,7 @@ struct Toolbar: View {
                                     .foregroundStyle(state.store.translateTarget == lang.name ? Color.white : Color.primary)
                                     .glassCapsule(tint: state.store.translateTarget == lang.name ? state.tint : nil, interactive: true)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(PressableStyle())
                         }
                     }
                     .padding(.horizontal, 2)
@@ -529,7 +552,7 @@ struct Toolbar: View {
                 .frame(width: 38, height: 38)
                 .glass(cornerRadius: 19, tint: active ? state.tint.opacity(0.35) : nil, interactive: true, force: true)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableStyle())
     }
 }
 
@@ -569,7 +592,7 @@ struct ToolStrip: View {
             .frame(height: 36)
             .glassCapsule(interactive: true)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableStyle())
     }
 }
 

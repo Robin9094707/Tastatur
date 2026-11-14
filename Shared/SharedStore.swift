@@ -84,6 +84,15 @@ final class SharedStore: ObservableObject {
     @Published var clipboardEnabled: Bool = true { didSet { set(clipboardEnabled, "clipboardEnabled") } }
     @Published var clipboardLimit: Int = 50 { didSet { set(clipboardLimit, "clipboardLimit") } }
     @Published var clipFolders: [String] = [] { didSet { setCodable(clipFolders, "clipFolders") } }
+    /// Frisch Kopiertes (Text, Link, Bild, Datei) oben in der Leiste zum Einfügen anbieten.
+    @Published var clipPeek: Bool = true { didSet { set(clipPeek, "clipPeek") } }
+    /// Bei Anmeldefeldern „Passwörter“ in der Leiste zeigen.
+    @Published var passwordHelper: Bool = true { didSet { set(passwordHelper, "passwordHelper") } }
+    /// Bei Anmeldefeldern automatisch zur iOS-Tastatur (Autofill) wechseln.
+    @Published var loginAutoSwitch: Bool = false { didSet { set(loginAutoSwitch, "loginAutoSwitch") } }
+    /// Passwort-App: „auto“ (nur iOS-Autofill) oder ID aus `PasswordApps.all`, „custom“ = eigene URL.
+    @Published var passwordApp: String = "auto" { didSet { set(passwordApp, "passwordApp") } }
+    @Published var passwordAppURL: String = "" { didSet { set(passwordAppURL, "passwordAppURL") } }
 
     @Published var haptics: Bool = true { didSet { set(haptics, "haptics") } }
     /// Haptik-Stärke 0…1 und Art („light“ = wie iOS, „soft“, „medium“, „rigid“, „heavy“).
@@ -201,6 +210,11 @@ final class SharedStore: ObservableObject {
         upd(\.clipboardEnabled, bool("clipboardEnabled", true))
         upd(\.clipboardLimit, d.object(forKey: "clipboardLimit") as? Int ?? 50)
         upd(\.clipFolders, getCodable("clipFolders") ?? [])
+        upd(\.clipPeek, bool("clipPeek", true))
+        upd(\.passwordHelper, bool("passwordHelper", true))
+        upd(\.loginAutoSwitch, bool("loginAutoSwitch", false))
+        upd(\.passwordApp, d.string(forKey: "passwordApp") ?? "auto")
+        upd(\.passwordAppURL, d.string(forKey: "passwordAppURL") ?? "")
         upd(\.haptics, bool("haptics", true))
         upd(\.hapticStrength, d.object(forKey: "hapticStrength") as? Double ?? 0.6)
         upd(\.hapticStyle, d.string(forKey: "hapticStyle") ?? "light")

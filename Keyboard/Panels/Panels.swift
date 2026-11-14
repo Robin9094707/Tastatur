@@ -970,11 +970,10 @@ struct KeyboardSettingsPanel: View {
             }
             Text("KI-Korrektur").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             HStack(spacing: 6) {
-                chip("Am Ende ✓", selected: store.aiCorrectMode == "end") { store.aiCorrectMode = "end" }
-                chip("Wort für Wort", selected: store.aiCorrectMode == "word") { store.aiCorrectMode = "word"; store.liveAICorrection = true }
-                chip("Aus", selected: store.aiCorrectMode == "off") { store.aiCorrectMode = "off" }
+                chip("Wenn ich fertig bin ✓", selected: store.aiCorrectMode != "off") { store.aiCorrectMode = "end" }
+                chip("Nur manuell", selected: store.aiCorrectMode == "off") { store.aiCorrectMode = "off" }
             }
-            Text(store.aiCorrectMode == "end" ? "Du tippst ungestört. Sobald du kurz pausierst, liest die KI den ganzen Text und korrigiert ihn direkt – mit Rückgängig. Jederzeit auch über „Korrigieren“ in der Schnellleiste." : store.aiCorrectMode == "word" ? "Die KI prüft schon während des Tippens alle paar Wörter (mehr Anfragen)." : "Nur lokale Autokorrektur – KI nur auf Knopfdruck („Korrigieren“).")
+            Text(store.aiCorrectMode != "off" ? "Beim Tippen prüft die KI nichts. Wenn du fertig bist (kurze Pause), liest sie den ganzen Text und bietet die Korrekturen an – ein Tipp übernimmt alle." : "Die KI prüft nur, wenn du in der Schnellleiste auf „Korrigieren“ tippst.")
                 .font(.caption2).foregroundStyle(.secondary)
             grid {
                 toggle("Live-Antwort", "text.cursor", $store.streamResponses)
@@ -1003,14 +1002,6 @@ struct KeyboardSettingsPanel: View {
             }
             Text("Schreibe für").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             AppPicker(state: state)
-            Text("Kontextprüfung beim Schreiben").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            HStack(spacing: 6) {
-                chip("Aus", selected: store.contextCheck == "off") { store.contextCheck = "off" }
-                chip("Normal", selected: store.contextCheck == "normal") { store.contextCheck = "normal" }
-                chip("Intensiv", selected: store.contextCheck == "intense") { store.contextCheck = "intense" }
-            }
-            Text(store.contextCheck == "intense" ? "Prüft nach jedem Satz bzw. alle paar Wörter – auch Logik, Fakten und Ton. Ideal mit ChatGPT-Abo." : store.contextCheck == "normal" ? "Prüft nach jedem Satz auf falsche Wörter, Grammatik und Widersprüche. Auffällige Stellen erscheinen orange." : "Keine automatische Prüfung – nur über „Prüfen“.")
-                .font(.caption2).foregroundStyle(.secondary)
             grid {
                 toggle("KI lernt mich", "brain.head.profile", $store.learnProfile)
             }
@@ -1148,7 +1139,7 @@ struct KeyboardSettingsPanel: View {
     private var typingPage: some View {
         VStack(alignment: .leading, spacing: 10) {
             typingToggles
-            Text("Power-Tippen: „Lernende Zonen“ passt die Tasten an deine Finger an, „Tipp-Korrektur“ repariert Vertipper über die echten Tipp-Positionen, „KI-Turbo“ korrigiert schon nach wenigen Wörtern.")
+            Text("Power-Tippen: „Lernende Zonen“ passt die Tasten an deine Finger an, „Tipp-Korrektur“ repariert Vertipper beim Leerzeichen über die echten Tipp-Positionen.")
                 .font(.caption2).foregroundStyle(.secondary)
             actionButton("Trefferzonen zurücksetzen", "scope") { state.resetTouchModel() }
             if store.haptics { hapticSettings }
@@ -1201,7 +1192,6 @@ struct KeyboardSettingsPanel: View {
             toggle("Trefferzonen", "hand.point.up.braille", $store.smartTouch)
             toggle("Lernende Zonen", "scope", $store.adaptiveTouch)
             toggle("Tipp-Korrektur", "hand.tap", $store.tapCorrection)
-            toggle("KI-Turbo", "bolt.fill", $store.aiTypoTurbo)
             toggle("Großschreibung", "textformat.size.larger", $store.autocapitalize)
             toggle("Doppel-Leer = .", "circle.fill", $store.doubleSpacePeriod)
             toggle("Wörter lernen", "brain", $store.learnWords)

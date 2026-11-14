@@ -40,6 +40,8 @@ final class BarModel: ObservableObject {
     /// Hinweise der Kontextprüfung (orange Markierung in der Leiste).
     @Published var issues: [OpenAIClient.CheckIssue] = []
     @Published var checking = false
+    /// Korrekturen nach der Schlussprüfung groß anbieten (bis zum nächsten Tastendruck).
+    @Published var offerFixes = false
 }
 
 /// Zustand, den nur das UIKit-Tastenfeld braucht.
@@ -785,7 +787,10 @@ final class KeyboardState: ObservableObject {
 
     func scheduleRefresh() {
         if !liveEditing, !bar.issues.isEmpty { pruneIssues() }
-        if !liveEditing { scheduleEndCheck() }
+        if !liveEditing {
+            if bar.offerFixes { bar.offerFixes = false }
+            scheduleEndCheck()
+        }
         if !liveEditing {
             liveCheckWork?.cancel()
             if liveCheckPending { scheduleLiveCheck() }
@@ -837,14 +842,7 @@ final class KeyboardState: ObservableObject {
                 list.append(Suggestion(text: macro.shortcut, kind: .macro, display: "⚡︎ " + macro.title))
             }
             var correction: String?
-            if store.autocorrect, shouldAutocorrect, !looksLikeName(word) {
-                if let f = tapFix, f.word == word, let r = f.result, !engine.spelledCorrectly(word) {
-                    correction = casedTapResult(word, r)
-                } else {
-                    correction = engine.correction(for: word)
-                    scheduleTapFix(for: word)
-                }
-            }
+            if store.autocorrect, shouldAutocorrect, !looksLikeName(word) { correction = engine.correction(for: word) }
             list.append(Suggestion(text: word, kind: .typed, display: "„\(word)“"))
             if let correction { list.append(Suggestion(text: correction, kind: .correction)) }
             for c in engine.completions(prefix: word, previousWord: previousWord, limit: 3) where !list.contains(where: { $0.text == c }) {
@@ -2145,7 +2143,7 @@ final class KeyboardState: ObservableObject {
 
     private var endCheckWork: DispatchWorkItem?
     private var endCheckTask: Task<Void, Never>?
-    private var lastEndChecked = ""
+    fileprivate(set) var lastEndChecked = ""
 
     /// Nach jeder Eingabe neu starten: Erst wenn du kurz pausierst, liest die KI den ganzen Text.
     private func scheduleEndCheck() {
@@ -2154,7 +2152,7 @@ final class KeyboardState: ObservableObject {
         guard store.aiCorrectMode == "end", hasFullAccess, store.hasAPIKey, panel == .none, !composeMode else { return }
         let work = DispatchWorkItem { [weak self] in self?.runEndCheck(manual: false) }
         endCheckWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: work)
     }
 
     /// Korrigiert den ganzen Text direkt im Feld (Paare ersetzen, Cursor bleibt, mit Rückgängig).
@@ -2181,37 +2179,30 @@ final class KeyboardState: ObservableObject {
         endCheckTask = Task { [weak self] in
             guard let self else { return }
             let fixes = (try? await self.client.finalCheck(text: text, after: afterContext)) ?? []
-            await MainActor.run { self.bar.checking = false }
-            guard !Task.isCancelled else { return }
-            await self.applyEndFixes(fixes, snapshot: snapshotBefore, manual: manual)
+            await MainActor.run {
+                self.bar.checking = false
+                guard !Task.isCancelled else { return }
+                self.offerEndFixes(fixes, snapshot: snapshotBefore, text: text, manual: manual)
+            }
         }
     }
 
+    /// Ergebnis der Schlussprüfung als Vorschlag anbieten – ein Tipp übernimmt alles.
     @MainActor
-    private func applyEndFixes(_ fixes: [OpenAIClient.TypoFix], snapshot: String, manual: Bool) async {
-        // Nur anwenden, wenn du inzwischen nicht weitergetippt hast
-        guard before == snapshot, panel == .none || manual, !composeMode else { return }
-        let safe = fixes.filter { f in
-            !neverFix.contains(f.wrong.lowercased()) && f.wrong.count <= 80 && f.right.count <= 120
-                && (before.contains(f.wrong) || after.contains(f.wrong))
-        }
-        guard !safe.isEmpty else {
+    private func offerEndFixes(_ fixes: [OpenAIClient.TypoFix], snapshot: String, text: String, manual: Bool) {
+        guard before == snapshot, !composeMode else { return }
+        let current = before + after
+        let list = fixes.filter { f in
+            !neverFix.contains(f.wrong.lowercased()) && f.wrong.count <= 80 && f.right.count <= 120 && current.contains(f.wrong)
+        }.map { OpenAIClient.CheckIssue(original: $0.wrong, suggestion: $0.right, kind: "Korrektur", reason: "") }
+        checkedText = text
+        bar.issues = list
+        bar.offerFixes = !list.isEmpty
+        if list.isEmpty {
             if manual { showToast("Alles sauber ✓") }
-            return
+        } else if store.haptics, hasFullAccess {
+            selection.selectionChanged()
         }
-        var applied: [LiveFix.Pair] = []
-        liveEditing = true
-        for f in safe.prefix(12) {
-            if await replacePhrase(f.wrong, with: f.right) {
-                applied.append(.init(wrong: f.wrong, right: f.right))
-                for w in f.right.split(separator: " ") where w.count > 2 { engine.learn(word: String(w), previous: nil) }
-            }
-        }
-        liveEditing = false
-        guard !applied.isEmpty else { return }
-        lastEndChecked = String(before.suffix(2500))
-        store.incrementStat("corrections", by: applied.count)
-        showLiveFix(LiveFix(pairs: applied))
     }
 
     // MARK: - Ziel-App
@@ -2240,7 +2231,7 @@ final class KeyboardState: ObservableObject {
     @Published var checkedText = ""
 
     private var contextCheckReady: Bool {
-        store.contextCheck != "off" && store.aiCorrectMode != "end" && hasFullAccess && store.hasAPIKey && panel == .none && !composeMode && shouldAutocorrect && !isCommandLine
+        store.contextCheck != "off" && store.aiCorrectMode == "word" && hasFullAccess && store.hasAPIKey && panel == .none && !composeMode && shouldAutocorrect && !isCommandLine
     }
 
     /// Nach jedem Wort: kurz warten und dann im Hintergrund prüfen.
@@ -2344,6 +2335,8 @@ final class KeyboardState: ObservableObject {
             }
             self.liveEditing = false
             self.bar.issues = []
+            self.bar.offerFixes = false
+            self.lastEndChecked = String(self.before.suffix(2500))
             self.feedback(.medium)
             self.showToast("\(count) Stelle\(count == 1 ? "" : "n") korrigiert ✓")
             if self.panel == .check { self.panel = .none }
@@ -2594,8 +2587,6 @@ final class KeyboardState: ObservableObject {
     }
     /// Im Hintergrund berechnete Tipp-Korrektur für das aktuelle Wort.
     private var tapFix: (word: String, result: String?)?
-    private let tapQueue = DispatchQueue(label: "de.tastatur.tapfix", qos: .userInitiated)
-    private var tapFixPending = ""
 
     /// Schnelle Vorprüfung (ohne Wörterbuch-Abfragen): Kommt eine Tipp-Korrektur überhaupt infrage?
     private func tapInputs(for word: String) -> TapInputs? {
@@ -2627,28 +2618,6 @@ final class KeyboardState: ObservableObject {
             if let result { return casedTapResult(word, result) }
         }
         return engine.correction(for: word)
-    }
-
-    /// Berechnet die Tipp-Korrektur im Hintergrund und zeigt sie dann in der Leiste (blockiert das Tippen nie).
-    private func scheduleTapFix(for word: String) {
-        guard tapFix?.word != word, tapFixPending != word, let inputs = tapInputs(for: word) else { return }
-        tapFixPending = word
-        tapQueue.async { [weak self] in
-            let result = Self.computeTap(inputs)
-            DispatchQueue.main.async {
-                guard let self else { return }
-                if self.tapFixPending == word { self.tapFixPending = "" }
-                guard self.currentWord == word else { return }
-                self.tapFix = (word, result)
-                guard let result, !self.engine.spelledCorrectly(word) else { return }
-                let cased = self.casedTapResult(word, result)
-                var list = self.suggestions.filter { $0.kind != .correction && $0.text != cased }
-                let pos = list.firstIndex { $0.kind == .typed }.map { $0 + 1 } ?? 0
-                list.insert(Suggestion(text: cased, kind: .correction), at: min(pos, list.count))
-                let newList = Array(list.prefix(3))
-                if newList.map(\.text) != self.suggestions.map(\.text) { self.suggestions = newList }
-            }
-        }
     }
 
     /// Merkt sich, wo du die Tasten eines richtig getippten Wortes getroffen hast.

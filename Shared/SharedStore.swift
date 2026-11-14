@@ -33,7 +33,7 @@ final class SharedStore: ObservableObject {
 
     static let defaultChatModel = "gpt-6-luna"
     static let fallbackModels = ["gpt-6-luna", "gpt-5.6-luna", "gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"]
-    static let settingsVersion = 9
+    static let settingsVersion = 10
 
     @Published var apiKey: String = "" { didSet { set(apiKey, "apiKey") } }
     /// API-Schlüssel vorübergehend deaktiviert (bleibt gespeichert).
@@ -291,6 +291,8 @@ final class SharedStore: ObservableObject {
             if !items.contains("commands") { items.insert("commands", at: min(2, items.count)) }
             if let newData = try? JSONEncoder().encode(items) { d.set(newData, forKey: "toolbarItems") }
         }
+        // v10: „Wort für Wort“ entfällt (bremste das Tippen) → „Am Ende“
+        if version < 10, d.string(forKey: "aiCorrectMode") == "word" { d.set("end", forKey: "aiCorrectMode") }
         // v9: „Alles korrigieren“ direkt hinter die KI
         if version < 9, let data = d.data(forKey: "toolbarItems"), var items = try? JSONDecoder().decode([String].self, from: data) {
             if !items.contains("fix") { items.insert("fix", at: items.firstIndex(of: "ai").map { $0 + 1 } ?? 0) }

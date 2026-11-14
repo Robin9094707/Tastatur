@@ -207,6 +207,7 @@ final class TextEngine {
     // MARK: - Gesten-Tippen
 
     private var swipeLearnedCache: [String: Int]?
+    private var learnsSinceCache = 0
 
     /// Gelernte Wörter (klein) für das Wischen – nur mehrfach benutzte.
     func swipeLearned() -> [String: Int] {
@@ -282,7 +283,9 @@ final class TextEngine {
         guard store.learnWords, word.count >= 2, word.count <= 40,
               word.rangeOfCharacter(from: .letters) != nil else { return }
         learned[word, default: 0] += weight
-        swipeLearnedCache = nil
+        // Zwischenspeicher fürs Wischen nur ab und zu neu bauen (spart Arbeit bei jedem Wort)
+        learnsSinceCache += 1
+        if learnsSinceCache > 25 || (swipeLearnedCache != nil && learned[word] == weight) { swipeLearnedCache = nil; learnsSinceCache = 0 }
         var p = ""
         for ch in word.lowercased().prefix(16) { p.append(ch); prefixes.insert(p) }
         if let prev = previous?.lowercased(), !prev.isEmpty {

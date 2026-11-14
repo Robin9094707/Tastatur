@@ -97,7 +97,7 @@ struct Toolbar: View {
                 }
                 .buttonStyle(.plain)
                 suggestionBar
-                if !bar.issues.isEmpty {
+                if !bar.issues.isEmpty && !bar.offerFixes {
                     Button { state.toggle(.check) } label: {
                         ZStack {
                             Circle().fill(Color.orange.gradient)
@@ -164,7 +164,30 @@ struct Toolbar: View {
 
     private var suggestionBar: some View {
         Group {
-            if let fix = bar.liveFix {
+            if bar.offerFixes, !bar.issues.isEmpty, bar.liveFix == nil {
+                HStack(spacing: 6) {
+                    Button { state.applyAllIssues() } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark.seal.fill")
+                            Text(bar.issues.count == 1 ? "\(bar.issues[0].original) → \(bar.issues[0].suggestion)" : "\(bar.issues.count) Korrekturen übernehmen")
+                                .lineLimit(1).minimumScaleFactor(0.7)
+                        }
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .frame(maxWidth: .infinity, minHeight: 32)
+                        .background(Capsule().fill(Color.green.gradient))
+                    }
+                    .buttonStyle(.plain)
+                    Button { state.toggle(.check) } label: {
+                        Image(systemName: "eye").font(.system(size: 14, weight: .semibold))
+                            .frame(width: 32, height: 32)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 4)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            } else if let fix = bar.liveFix {
                 Button { state.undoLiveFix() } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "checkmark.seal.fill").foregroundStyle(state.tint)
@@ -187,7 +210,7 @@ struct Toolbar: View {
                     if bar.thinking {
                         Text("KI denkt mit …").font(.caption).foregroundStyle(.secondary)
                     } else if bar.checking {
-                        Text("Prüfe Text …").font(.caption).foregroundStyle(.secondary)
+                        Text("KI liest deinen Text …").font(.caption).foregroundStyle(.secondary)
                     } else {
                         let profile = state.store.activeProfile.map { "\($0.emoji) \($0.name)" }
                         let app = state.store.activeApp.map { "\($0.emoji) \($0.name)" }
@@ -227,6 +250,7 @@ struct Toolbar: View {
         .animation(.easeOut(duration: 0.18), value: bar.phrases.map(\.text))
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: bar.liveFix)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: bar.issues.count)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: bar.offerFixes)
         .padding(.trailing, state.store.aiSuggestMode != "off" && bar.liveFix == nil ? 36 : 0)
         .frame(height: 38)
         .frame(maxWidth: .infinity)

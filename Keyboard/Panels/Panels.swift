@@ -127,10 +127,10 @@ struct MissingSetupBanner: View {
             if !state.hasFullAccess {
                 Label("Aktiviere „Vollen Zugriff erlauben“ in Einstellungen → Allgemein → Tastatur → Tastaturen → Tastatur KI.", systemImage: "lock.fill")
             } else if !state.store.hasAPIKey {
-                Label("Kein API-Schlüssel. Öffne die App oder kopiere deinen Schlüssel und tippe hier:", systemImage: "key.fill")
+                Label("Kein API-Schlüssel. Füge ihn aus der Zwischenablage ein oder tippe ihn direkt hier ein:", systemImage: "key.fill")
                 HStack {
-                    Button("Schlüssel einfügen") { state.pasteAPIKey() }
-                    Button("App öffnen") { state.openApp("settings") }
+                    Button("Einfügen") { state.pasteAPIKey() }
+                    Button("Eintippen") { state.beginInput(.apiKey) }
                 }
                 .buttonStyle(.bordered)
             }
@@ -559,64 +559,395 @@ private struct EmojiCell: View {
     }
 }
 
-// MARK: - Schnelleinstellungen
+// MARK: - Einstellungen (komplett in der Tastatur)
 
 struct KeyboardSettingsPanel: View {
     @ObservedObject var state: KeyboardState
     @ObservedObject var store = SharedStore.shared
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Profil").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        chip("Keins", selected: store.activeProfileID.isEmpty) { state.setProfile("") }
-                        ForEach(store.profiles) { p in
-                            chip("\(p.emoji) \(p.name)", selected: store.activeProfileID == p.id.uuidString) {
-                                state.setProfile(p.id.uuidString)
-                            }
-                        }
-                    }
-                }
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                    toggle("Autokorrektur", "textformat.abc.dottedunderline", $store.autocorrect)
-                    toggle("KI-Vorschläge", "sparkle", $store.aiSuggestions)
-                    toggle("Haptik", "hand.tap", $store.haptics)
-                    toggle("Klick-Ton", "speaker.wave.2", $store.keySound)
-                    toggle("Tasten-Vorschau", "rectangle.on.rectangle", $store.keyPopups)
-                    toggle("Zahlenreihe", "number", $store.showNumberRow)
-                    toggle("Makros auto", "bolt", $store.macroAutoExpand)
-                    toggle("Live-Antwort", "text.cursor", $store.streamResponses)
-                }
-                if !store.usesAppGroup || !store.hasAPIKey {
-                    Button { state.pasteAPIKey() } label: {
-                        Label("API-Schlüssel aus Zwischenablage", systemImage: "key")
-                            .font(.footnote.weight(.semibold))
-                            .frame(maxWidth: .infinity, minHeight: 36)
-                            .glass(cornerRadius: 12, interactive: true)
+        VStack(spacing: 0) {
+            if state.settingsPage != .main {
+                HStack {
+                    Button {
+                        state.feedback()
+                        state.settingsPage = .main
+                    } label: {
+                        Label("Einstellungen", systemImage: "chevron.left")
+                            .font(.caption.weight(.semibold))
                     }
                     .buttonStyle(.plain)
+                    Spacer()
+                    Text(pageTitle).font(.caption.weight(.bold)).foregroundStyle(.secondary)
                 }
-                Button { state.openApp("settings") } label: {
-                    Label("App öffnen", systemImage: "arrow.up.forward.app")
-                        .font(.footnote.weight(.semibold))
-                        .frame(maxWidth: .infinity, minHeight: 36)
-                        .glass(cornerRadius: 12, tint: state.tint.opacity(0.4), interactive: true)
-                }
-                .buttonStyle(.plain)
+                .padding(.horizontal, 12)
+                .padding(.top, 4)
             }
-            .padding(10)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    switch state.settingsPage {
+                    case .main: mainPage
+                    case .ai: aiPage
+                    case .context: contextPage
+                    case .design: designPage
+                    case .typing: typingPage
+                    case .macros: macrosPage
+                    case .actions: actionsPage
+                    }
+                }
+                .padding(10)
+            }
         }
         .onChange(of: store.showNumberRow) { _, _ in state.onHeightChange?(state.totalHeight) }
     }
 
-    private func chip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+    private var pageTitle: String {
+        switch state.settingsPage {
+        case .main: return ""
+        case .ai: return "KI & API"
+        case .context: return "Kontext & Profile"
+        case .design: return "Design"
+        case .typing: return "Tippen"
+        case .macros: return "Makros"
+        case .actions: return "KI-Aktionen"
+        }
+    }
+
+    // MARK: Seiten
+
+    private var mainPage: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if !store.usesAppGroup {
+                Label("App Group nicht verfügbar – alle Einstellungen werden direkt hier in der Tastatur gespeichert.", systemImage: "info.circle")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Text("Profil").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            profileChips
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                navTile("KI & API", "key.fill", store.hasAPIKey ? "Verbunden" : "Schlüssel fehlt", .ai)
+                navTile("Kontext", "person.text.rectangle", store.personalContext.isEmpty ? "Leer" : "Aktiv", .context)
+                navTile("Design", "paintbrush.pointed", (KeyStyle(rawValue: store.keyStyle) ?? .glass).label, .design)
+                navTile("Tippen", "keyboard", store.autocorrect ? "Autokorrektur an" : "Autokorrektur aus", .typing)
+                navTile("Makros", "text.badge.star", "\(store.macros.count) Makros", .macros)
+                navTile("KI-Aktionen", "wand.and.stars", "\(store.actions.filter(\.enabled).count) aktiv", .actions)
+            }
+            HStack {
+                actionButton("Text kopieren", "doc.on.doc") { state.copyAll() }
+                actionButton("App öffnen", "arrow.up.forward.app") { state.openApp("settings") }
+            }
+        }
+    }
+
+    private var aiPage: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            row("API-Schlüssel", store.hasAPIKey ? maskedKey : "Nicht gesetzt", "key.fill") {
+                state.beginInput(.apiKey, prefill: "")
+            }
+            HStack {
+                actionButton("Aus Ablage einfügen", "doc.on.clipboard") { state.pasteAPIKey() }
+                if store.hasAPIKey {
+                    actionButton("Entfernen", "trash") { store.apiKey = ""; state.showToast("API-Schlüssel entfernt") }
+                }
+            }
+            Text("Modell").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(SharedStore.fallbackModels, id: \.self) { m in
+                        chip(m, selected: store.chatModel == m) {
+                            store.chatModel = m
+                            store.fastModel = m
+                        }
+                    }
+                    chip("Eigenes …", selected: !SharedStore.fallbackModels.contains(store.chatModel)) {
+                        state.beginInput(.chatModel, prefill: store.chatModel)
+                    }
+                }
+            }
+            grid {
+                toggle("KI-Vorschläge", "sparkles", $store.aiSuggestions)
+                toggle("Live-Korrektur", "checkmark.seal", $store.liveAICorrection)
+                toggle("Live-Antwort", "text.cursor", $store.streamResponses)
+                toggle("Umfeld senden", "text.viewfinder", $store.useAppContext)
+            }
+            Text("Antwortsprache").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                chip("Wie Original", selected: store.outputLanguage == "auto") { store.outputLanguage = "auto" }
+                chip("Deutsch", selected: store.outputLanguage == "Deutsch") { store.outputLanguage = "Deutsch" }
+                chip("Englisch", selected: store.outputLanguage == "Englisch") { store.outputLanguage = "Englisch" }
+            }
+            row("API-Adresse", store.baseURL, "server.rack") { state.beginInput(.baseURL, prefill: store.baseURL) }
+        }
+    }
+
+    private var contextPage: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            row("Über mich", store.personalContext.isEmpty ? "Tippen zum Ausfüllen" : store.personalContext, "person.crop.circle") {
+                state.beginInput(.personalContext, prefill: store.personalContext)
+            }
+            row("Schreibstil", store.writingStyle.isEmpty ? "Tippen zum Ausfüllen" : store.writingStyle, "pencil.and.scribble") {
+                state.beginInput(.writingStyle, prefill: store.writingStyle)
+            }
+            Text("Profile").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            profileChips
+            ForEach(store.profiles) { p in
+                HStack {
+                    Text("\(p.emoji) \(p.name)").font(.footnote.weight(.semibold))
+                    Text(p.context).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer()
+                    Button { state.beginInput(.profileContext(p.id), prefill: p.context) } label: { Image(systemName: "pencil") }
+                        .buttonStyle(.plain)
+                    Button { store.profiles.removeAll { $0.id == p.id } } label: { Image(systemName: "trash").foregroundStyle(.secondary) }
+                        .buttonStyle(.plain)
+                }
+                .padding(8)
+                .glass(cornerRadius: 10)
+            }
+            actionButton("Neues Profil", "plus") { state.beginInput(.profileName) }
+        }
+    }
+
+    private var designPage: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Themes").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(ThemePreset.all) { t in
+                        chip(t.name, selected: store.themeID == t.id) { t.apply(to: store) }
+                    }
+                }
+            }
+            Text("Tastenstil").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(KeyStyle.allCases) { k in
+                        chip(k.label, selected: store.keyStyle == k.rawValue) { store.keyStyle = k.rawValue; store.themeID = "" }
+                    }
+                }
+            }
+            Text("Hintergrund").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    chip("System", selected: store.backgroundStyle == "system") { store.backgroundStyle = "system" }
+                    ForEach(Array(Theme.backgroundPresets.enumerated()), id: \.offset) { i, p in
+                        Button {
+                            store.backgroundStyle = "gradient"
+                            store.backgroundPreset = i
+                            store.themeID = ""
+                        } label: {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(LinearGradient(colors: p.colors, startPoint: .topLeading, endPoint: .bottomTrailing))
+                                .frame(width: 44, height: 30)
+                                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .strokeBorder(.white, lineWidth: store.backgroundStyle == "gradient" && store.backgroundPreset == i ? 2.5 : 0))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            Text("Akzentfarbe").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                ForEach(Array(Theme.tints.enumerated()), id: \.offset) { i, t in
+                    Button { store.keyboardTint = i } label: {
+                        Circle().fill(t.color).frame(width: 28, height: 28)
+                            .overlay(Circle().strokeBorder(.white, lineWidth: store.keyboardTint == i ? 2.5 : 0))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Text("Schrift").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                chip("Standard", selected: store.keyFontDesign == "default") { store.keyFontDesign = "default" }
+                chip("Rund", selected: store.keyFontDesign == "rounded") { store.keyFontDesign = "rounded" }
+                chip("Serif", selected: store.keyFontDesign == "serif") { store.keyFontDesign = "serif" }
+                chip("Mono", selected: store.keyFontDesign == "mono") { store.keyFontDesign = "mono" }
+            }
+            stepper("Deckkraft", "\(Int(store.keyOpacity * 100)) %",
+                    minus: { store.keyOpacity = max(0.2, store.keyOpacity - 0.1) },
+                    plus: { store.keyOpacity = min(1, store.keyOpacity + 0.1) })
+            stepper("Ecken", "\(Int(store.keyCornerRadius)) pt",
+                    minus: { store.keyCornerRadius = max(2, store.keyCornerRadius - 2) },
+                    plus: { store.keyCornerRadius = min(20, store.keyCornerRadius + 2) })
+            stepper("Schriftgröße", "\(Int(store.keyFontScale * 100)) %",
+                    minus: { store.keyFontScale = max(0.8, store.keyFontScale - 0.05) },
+                    plus: { store.keyFontScale = min(1.3, store.keyFontScale + 0.05) })
+        }
+    }
+
+    private var typingPage: some View {
+        grid {
+            toggle("Autokorrektur", "textformat.abc.dottedunderline", $store.autocorrect)
+            toggle("Trefferzonen", "hand.point.up.braille", $store.smartTouch)
+            toggle("Großschreibung", "textformat.size.larger", $store.autocapitalize)
+            toggle("Doppel-Leer = .", "circle.fill", $store.doubleSpacePeriod)
+            toggle("Wörter lernen", "brain", $store.learnWords)
+            toggle("Zahlenreihe", "number", $store.showNumberRow)
+            toggle("Tasten-Vorschau", "rectangle.on.rectangle", $store.keyPopups)
+            toggle("Haptik", "hand.tap", $store.haptics)
+            toggle("Klick-Ton", "speaker.wave.2", $store.keySound)
+            toggle("Makros auto", "bolt", $store.macroAutoExpand)
+            toggle("Ablage-Verlauf", "clock.arrow.circlepath", $store.clipboardEnabled)
+        }
+    }
+
+    private var macrosPage: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            actionButton("Neues Makro", "plus") { state.beginInput(.macroShortcut) }
+            ForEach(store.macros) { m in
+                HStack {
+                    Text(m.shortcut.isEmpty ? "–" : m.shortcut)
+                        .font(.caption.monospaced().weight(.bold))
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .glassCapsule(tint: state.tint.opacity(0.3))
+                    Text(m.text).font(.caption).lineLimit(1)
+                    Spacer()
+                    Button { store.macros.removeAll { $0.id == m.id } } label: {
+                        Image(systemName: "trash").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(8)
+                .glass(cornerRadius: 10)
+            }
+        }
+    }
+
+    private var actionsPage: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            actionButton("Eigene KI-Aktion", "plus") { state.beginInput(.actionTitle) }
+            ForEach(store.actions) { a in
+                HStack {
+                    Image(systemName: a.symbol).foregroundStyle(state.tint).frame(width: 20)
+                    Text(a.title).font(.footnote.weight(.semibold))
+                    Text(a.category.label).font(.caption2).foregroundStyle(.secondary)
+                    Spacer()
+                    if !a.builtIn {
+                        Button { store.actions.removeAll { $0.id == a.id } } label: {
+                            Image(systemName: "trash").foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Button {
+                        if let i = store.actions.firstIndex(where: { $0.id == a.id }) { store.actions[i].enabled.toggle() }
+                        state.feedback()
+                    } label: {
+                        Image(systemName: a.enabled ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(a.enabled ? state.tint : Color.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(8)
+                .glass(cornerRadius: 10)
+            }
+            Button("Standard-Aktionen wiederherstellen") {
+                store.actions = AIAction.defaults + store.actions.filter { !$0.builtIn }
+            }
+            .font(.caption)
+        }
+    }
+
+    // MARK: Bausteine
+
+    private var maskedKey: String {
+        let k = store.apiKey
+        guard k.count > 10 else { return "••••" }
+        return String(k.prefix(5)) + "••••" + String(k.suffix(4))
+    }
+
+    private var profileChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                chip("Keins", selected: store.activeProfileID.isEmpty) { state.setProfile("") }
+                ForEach(store.profiles) { p in
+                    chip("\(p.emoji) \(p.name)", selected: store.activeProfileID == p.id.uuidString) {
+                        state.setProfile(p.id.uuidString)
+                    }
+                }
+            }
+        }
+    }
+
+    private func navTile(_ title: String, _ symbol: String, _ subtitle: String, _ page: KeyboardState.SettingsPage) -> some View {
+        Button {
+            state.feedback()
+            state.settingsPage = page
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: symbol).foregroundStyle(state.tint).frame(width: 20)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.footnote.weight(.semibold))
+                    Text(subtitle).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 46)
+            .glass(cornerRadius: 12, interactive: true)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func row(_ title: String, _ value: String, _ symbol: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: symbol).foregroundStyle(state.tint).frame(width: 20)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.footnote.weight(.semibold))
+                    Text(value).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "pencil").font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .frame(minHeight: 44)
+            .glass(cornerRadius: 12, interactive: true)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func grid<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+            content()
+        }
+    }
+
+    private func stepper(_ title: String, _ value: String, minus: @escaping () -> Void, plus: @escaping () -> Void) -> some View {
+        HStack {
+            Text(title).font(.footnote.weight(.medium))
+            Spacer()
+            Button { minus(); state.feedback() } label: { Image(systemName: "minus.circle.fill").font(.title3) }
+                .buttonStyle(.plain)
+            Text(value).font(.caption.monospacedDigit()).frame(width: 50)
+            Button { plus(); state.feedback() } label: { Image(systemName: "plus.circle.fill").font(.title3) }
+                .buttonStyle(.plain)
+        }
+        .foregroundStyle(state.tint)
+        .padding(.horizontal, 10)
+        .frame(height: 38)
+        .glass(cornerRadius: 12)
+    }
+
+    private func actionButton(_ title: String, _ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: symbol)
+                .font(.footnote.weight(.semibold))
+                .frame(maxWidth: .infinity, minHeight: 36)
+                .glass(cornerRadius: 12, tint: state.tint.opacity(0.3), interactive: true)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func chip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button {
+            action()
+            state.feedback()
+        } label: {
             Text(title)
                 .font(.footnote.weight(.semibold))
                 .padding(.horizontal, 12)
                 .frame(height: 32)
+                .foregroundStyle(selected ? Color.white : Color.primary)
                 .glassCapsule(tint: selected ? state.tint : nil, interactive: true)
         }
         .buttonStyle(.plain)

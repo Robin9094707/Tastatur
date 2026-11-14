@@ -72,7 +72,52 @@ final class KeyboardState: ObservableObject {
     @Published var aiError: String?
     @Published var aiTitle = ""
     @Published var composeMode = false
-    @Published var composeIsRefine = false
+    @Published var composeTarget: ComposeTarget = .ai
+    @Published var settingsPage: SettingsPage = .main
+    private var pendingMacroShortcut = ""
+    var composeIsRefine: Bool { composeTarget == .refine }
+
+    /// Wohin die Eingabe im Eingabe-Modus geht (KI-Auftrag oder eine Einstellung).
+    enum ComposeTarget: Equatable {
+        case ai, refine, apiKey, baseURL, chatModel, personalContext, writingStyle
+        case macroShortcut, macroText, profileName, profileContext(UUID), actionTitle, actionPrompt
+
+        var placeholder: String {
+            switch self {
+            case .ai: return "Was soll die KI schreiben?"
+            case .refine: return "Wie soll das Ergebnis geändert werden?"
+            case .apiKey: return "OpenAI-API-Schlüssel (sk-…)"
+            case .baseURL: return "API-Adresse (https://…/v1)"
+            case .chatModel: return "Modellname, z. B. gpt-6-luna"
+            case .personalContext: return "Über mich: Name, Beruf, Fakten …"
+            case .writingStyle: return "Mein Schreibstil …"
+            case .macroShortcut: return "Kürzel für das Makro (z. B. adr)"
+            case .macroText: return "Text des Makros"
+            case .profileName: return "Name des neuen Profils"
+            case .profileContext: return "Kontext für dieses Profil"
+            case .actionTitle: return "Name der KI-Aktion"
+            case .actionPrompt: return "Anweisung an die KI"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .ai: return "sparkles"
+            case .refine: return "slider.horizontal.3"
+            case .apiKey: return "key.fill"
+            case .baseURL: return "server.rack"
+            case .chatModel: return "cpu"
+            case .personalContext, .writingStyle, .profileContext: return "person.text.rectangle"
+            case .macroShortcut, .macroText: return "text.badge.star"
+            case .profileName: return "person.2"
+            case .actionTitle, .actionPrompt: return "wand.and.stars"
+            }
+        }
+
+        var isSetting: Bool { self != .ai && self != .refine }
+    }
+
+    enum SettingsPage: Equatable { case main, ai, context, design, typing, macros, actions }
     @Published var composeText = ""
     private var lastRun: (() -> Void)?
     private var aiTask: Task<Void, Never>?
@@ -658,7 +703,7 @@ final class KeyboardState: ObservableObject {
             return false
         }
         if !store.hasAPIKey {
-            showToast("Kein API-Schlüssel – öffne die App Tastatur KI.")
+            showToast("Kein API-Schlüssel – ✨ → Einstellungen → KI & API")
             return false
         }
         return true
@@ -867,41 +912,125 @@ final class KeyboardState: ObservableObject {
 
     func startCompose(refine: Bool = false) {
         guard requireAI() else { return }
-        composeText = ""
-        composeIsRefine = refine
+        beginInput(refine ? .refine : .ai)
+    }
+
+    /// Startet den Eingabe-Modus: Die Tasten schreiben in die Leiste statt ins Textfeld.
+    func beginInput(_ target: ComposeTarget, prefill: String = "") {
+        composeTarget = target
+        composeText = prefill
         composeMode = true
-        if !refine { panel = .none } else { panel = .none }
+        panel = .none
         layer = .letters
-        shift = .on
+        let lowerStart: Bool
+        switch target {
+        case .apiKey, .baseURL, .chatModel, .macroShortcut: lowerStart = true
+        default: lowerStart = !prefill.isEmpty
+        }
+        shift = lowerStart ? .off : .on
         updateReturnKey()
     }
 
     func cancelCompose() {
+        let target = composeTarget
         composeMode = false
         composeText = ""
+        composeTarget = .ai
         updateReturnKey()
-        if composeIsRefine, !aiResult.isEmpty { panel = .result }
-        composeIsRefine = false
+        if target == .refine, !aiResult.isEmpty { panel = .result }
+        if target.isSetting { panel = .settings }
         updateAutoShift()
         scheduleRefresh()
     }
 
     func sendCompose() {
-        let prompt = composeText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty else { cancelCompose(); return }
-        let isRefine = composeIsRefine
+        let raw = composeText
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let target = composeTarget
         composeMode = false
-        composeIsRefine = false
+        composeTarget = .ai
         composeText = ""
         updateReturnKey()
-        if isRefine {
-            refine(prompt)
+        if target.isSetting {
+            saveSettingInput(target, text)
+            return
+        }
+        guard !text.isEmpty else { cancelCompose(); return }
+        if target == .refine {
+            refine(text)
             return
         }
         let context = store.useAppContext ? String((before + after).suffix(8000)) : nil
-        runAI(title: "„\(prompt.prefix(30))“", original: "", target: .none, showDiff: false) { [client = self.client] partial in
-            try await client.compose(prompt: prompt, context: context, onPartial: partial)
+        runAI(title: "„\(text.prefix(30))“", original: "", target: .none, showDiff: false) { [client = self.client] partial in
+            try await client.compose(prompt: text, context: context, onPartial: partial)
         }
+    }
+
+    /// Speichert eine in der Tastatur getippte Einstellung.
+    private func saveSettingInput(_ target: ComposeTarget, _ text: String) {
+        panel = .settings
+        switch target {
+        case .apiKey:
+            let key = text.replacingOccurrences(of: " ", with: "")
+            store.apiKey = key
+            showToast(key.isEmpty ? "API-Schlüssel entfernt" : "API-Schlüssel gespeichert ✓")
+        case .baseURL:
+            store.baseURL = text.isEmpty ? "https://api.openai.com/v1" : text.replacingOccurrences(of: " ", with: "")
+            showToast("API-Adresse gespeichert ✓")
+        case .chatModel:
+            guard !text.isEmpty else { return }
+            let m = text.lowercased().replacingOccurrences(of: " ", with: "")
+            store.chatModel = m
+            store.fastModel = m
+            showToast("Modell: \(m)")
+        case .personalContext:
+            store.personalContext = text
+            showToast("„Über mich“ gespeichert ✓")
+        case .writingStyle:
+            store.writingStyle = text
+            showToast("Schreibstil gespeichert ✓")
+        case .macroShortcut:
+            guard !text.isEmpty else { return }
+            pendingMacroShortcut = text.replacingOccurrences(of: " ", with: "")
+            beginInput(.macroText)
+        case .macroText:
+            guard !text.isEmpty else { return }
+            let sc = pendingMacroShortcut
+            store.macros.append(Macro(shortcut: sc, title: sc.isEmpty ? String(text.prefix(20)) : sc, text: text))
+            pendingMacroShortcut = ""
+            showToast("Makro „\(sc)“ angelegt ✓")
+        case .profileName:
+            guard !text.isEmpty else { return }
+            let p = ContextProfile(name: text, emoji: "✨", context: "")
+            store.profiles.append(p)
+            store.activeProfileID = p.id.uuidString
+            beginInput(.profileContext(p.id))
+        case .profileContext(let id):
+            if let i = store.profiles.firstIndex(where: { $0.id == id }) {
+                store.profiles[i].context = text
+                showToast("Profil gespeichert ✓")
+            }
+        case .actionTitle:
+            guard !text.isEmpty else { return }
+            pendingMacroShortcut = text
+            beginInput(.actionPrompt)
+        case .actionPrompt:
+            guard !text.isEmpty else { return }
+            store.actions.append(AIAction(title: pendingMacroShortcut, symbol: "wand.and.stars", prompt: text))
+            showToast("KI-Aktion „\(pendingMacroShortcut)“ angelegt ✓")
+            pendingMacroShortcut = ""
+        case .ai, .refine:
+            break
+        }
+    }
+
+    /// Fügt Text aus der Zwischenablage in die aktuelle Eingabe ein.
+    func pasteIntoCompose() {
+        guard hasFullAccess, let s = UIPasteboard.general.string else {
+            showToast("Zwischenablage leer oder kein voller Zugriff.")
+            return
+        }
+        composeText += s.trimmingCharacters(in: composeTarget == .apiKey ? .whitespacesAndNewlines : CharacterSet())
     }
 
     /// Ergebnis anwenden.

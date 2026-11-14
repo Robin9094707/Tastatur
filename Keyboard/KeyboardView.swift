@@ -121,7 +121,7 @@ struct Toolbar: View {
         case .clipboard: return "Zwischenablage"
         case .macros: return "Makros"
         case .emoji: return "Emojis"
-        case .settings: return "Schnelleinstellungen"
+        case .settings: return "Einstellungen"
         default: return ""
         }
     }
@@ -215,8 +215,8 @@ struct Toolbar: View {
         HStack(spacing: 6) {
             circleButton("xmark", active: true) { state.cancelCompose() }
             HStack {
-                Image(systemName: state.composeIsRefine ? "slider.horizontal.3" : "sparkles").foregroundStyle(state.tint)
-                Text(state.composeText.isEmpty ? (state.composeIsRefine ? "Wie soll das Ergebnis geändert werden?" : "Was soll die KI schreiben?") : state.composeText)
+                Image(systemName: state.composeTarget.symbol).foregroundStyle(state.tint)
+                Text(state.composeText.isEmpty ? state.composeTarget.placeholder : displayedComposeText)
                     .foregroundStyle(state.composeText.isEmpty ? .secondary : .primary)
                     .lineLimit(1)
                     .truncationMode(.head)
@@ -224,13 +224,28 @@ struct Toolbar: View {
                 if !state.composeText.isEmpty {
                     Rectangle().fill(state.tint).frame(width: 2, height: 18).opacity(0.8)
                 }
+                if state.composeTarget.isSetting {
+                    Button { state.pasteIntoCompose() } label: {
+                        Image(systemName: "doc.on.clipboard").font(.system(size: 13, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             .font(.subheadline)
             .padding(.horizontal, 12)
             .frame(height: 38)
             .glassCapsule(tint: state.tint.opacity(0.35), force: true)
-            circleButton("arrow.up", active: true) { state.sendCompose() }
+            circleButton(state.composeTarget.isSetting ? "checkmark" : "arrow.up", active: true) { state.sendCompose() }
         }
+    }
+
+    /// API-Schlüssel nicht im Klartext zeigen.
+    private var displayedComposeText: String {
+        let t = state.composeText
+        if state.composeTarget == .apiKey, t.count > 8 {
+            return String(t.prefix(5)) + String(repeating: "•", count: min(12, t.count - 9)) + String(t.suffix(4))
+        }
+        return t
     }
 
     private func circleButton(_ symbol: String, active: Bool, action: @escaping () -> Void) -> some View {
@@ -259,7 +274,7 @@ struct ToolStrip: View {
                     tool("Emoji", "face.smiling") { state.toggle(.emoji) }
                     tool("Einfügen", "doc.on.doc") { state.pasteCurrent() }
                     tool("Alles kopieren", "doc.on.clipboard.fill") { state.copyAll() }
-                    tool("Optionen", "gearshape") { state.toggle(.settings) }
+                    tool("Einstellungen", "gearshape") { state.settingsPage = .main; state.toggle(.settings) }
                     tool("Ausblenden", "keyboard.chevron.compact.down") { state.controller?.dismissKeyboard() }
                 }
                 .padding(.vertical, 2)

@@ -6,6 +6,8 @@ struct AppearanceView: View {
     @EnvironmentObject var store: SharedStore
     @State private var photoItem: PhotosPickerItem?
     @State private var customColor: Color = .indigo
+    @State private var keyColor: Color = .white
+    @State private var textColor: Color = .black
     @State private var loadingPhoto = false
 
     var body: some View {
@@ -13,6 +15,69 @@ struct AppearanceView: View {
             VStack(spacing: 16) {
                 KeyboardPreview()
                     .environmentObject(store)
+
+                GlassCard {
+                    CardHeader(title: "Themes", symbol: "swatchpalette", subtitle: "Komplett-Looks mit einem Tipp")
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            ForEach(ThemePreset.all) { theme in
+                                Button {
+                                    withAnimation(.snappy) { theme.apply(to: store) }
+                                    keyColor = Theme.color(hex: theme.keyColorHex)
+                                } label: {
+                                    VStack(spacing: 6) {
+                                        ThemeThumbnail(theme: theme)
+                                            .frame(width: 92, height: 64)
+                                            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                                .strokeBorder(.white, lineWidth: store.themeID == theme.id ? 3 : 0))
+                                        Text(theme.name).font(.caption2.weight(.semibold)).lineLimit(1)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+
+                GlassCard {
+                    CardHeader(title: "Tastenstil", symbol: "keyboard.badge.ellipsis")
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
+                        ForEach(KeyStyle.allCases) { style in
+                            Button {
+                                store.keyStyle = style.rawValue
+                                store.themeID = ""
+                            } label: {
+                                VStack(spacing: 4) {
+                                    Image(systemName: style.symbol).font(.title3)
+                                    Text(style.label).font(.caption2.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.7)
+                                }
+                                .frame(maxWidth: .infinity, minHeight: 58)
+                                .foregroundStyle(store.keyStyle == style.rawValue ? Color.white : Color.primary)
+                                .glass(cornerRadius: 14, tint: store.keyStyle == style.rawValue ? Theme.tint(store.keyboardTint) : nil, interactive: true)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    if store.keyStyle == KeyStyle.solid.rawValue || store.keyStyle == KeyStyle.bubble.rawValue {
+                        ColorPicker("Tastenfarbe", selection: $keyColor, supportsOpacity: false)
+                            .onChange(of: keyColor) { _, c in store.keyColorHex = Theme.hex(from: c) }
+                    }
+                    Toggle("Eigene Schriftfarbe", isOn: Binding(
+                        get: { !store.keyTextColorHex.isEmpty },
+                        set: { store.keyTextColorHex = $0 ? Theme.hex(from: textColor) : "" }))
+                    if !store.keyTextColorHex.isEmpty {
+                        ColorPicker("Schriftfarbe", selection: $textColor, supportsOpacity: false)
+                            .onChange(of: textColor) { _, c in store.keyTextColorHex = Theme.hex(from: c) }
+                    }
+                    Picker("Schriftart", selection: $store.keyFontDesign) {
+                        Text("Standard").tag("default")
+                        Text("Rund").tag("rounded")
+                        Text("Serif").tag("serif")
+                        Text("Mono").tag("mono")
+                    }
+                    .pickerStyle(.segmented)
+                }
 
                 GlassCard {
                     CardHeader(title: "Hintergrund", symbol: "photo.on.rectangle.angled")
@@ -103,7 +168,11 @@ struct AppearanceView: View {
         }
         .glassBackground()
         .navigationTitle("Design")
-        .onAppear { customColor = Theme.color(hex: store.backgroundColorHex) }
+        .onAppear {
+            customColor = Theme.color(hex: store.backgroundColorHex)
+            keyColor = Theme.color(hex: store.keyColorHex)
+            if !store.keyTextColorHex.isEmpty { textColor = Theme.color(hex: store.keyTextColorHex) }
+        }
         .onChange(of: photoItem) { _, item in
             guard let item else { return }
             loadingPhoto = true
@@ -204,15 +273,64 @@ struct KeyboardPreview: View {
     }
 
     private func key(_ text: String, special: Bool) -> some View {
-        let o = store.keyOpacity
-        let fill: Color = dark
-            ? Color.white.opacity((special ? 0.13 : 0.30) * o)
-            : (special ? Color(white: 0.68).opacity(0.85 * o) : Color.white.opacity(0.95 * o))
+        let style = KeyStyle(rawValue: store.keyStyle) ?? .glass
+        let c = KeyStyleKit.colors(style: style, dark: dark, tint: UIColor(Theme.tint(store.keyboardTint)),
+                                   keyColor: Theme.uiColor(hex: store.keyColorHex),
+                                   textColor: store.keyTextColorHex.isEmpty ? nil : Theme.uiColor(hex: store.keyTextColorHex),
+                                   opacity: store.keyOpacity)
+        let radius = c.capsule ? 18 : store.keyCornerRadius * 0.85
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         return Text(text)
-            .font(.system(size: (text.count > 2 ? 11 : 17) * store.keyFontScale))
+            .font(.system(size: (text.count > 2 ? 11 : 17) * store.keyFontScale, design: KeyStyleKit.swiftUIDesign(store.keyFontDesign)))
+            .foregroundStyle(Color(uiColor: special ? c.specialText : c.text))
+            .shadow(color: style == .neon ? Theme.tint(store.keyboardTint) : .clear, radius: 3)
             .frame(maxWidth: .infinity)
             .frame(height: 36)
-            .background(RoundedRectangle(cornerRadius: store.keyCornerRadius * 0.85, style: .continuous).fill(fill))
-            .shadow(color: .black.opacity(0.3 * o), radius: 0, y: 1)
+            .background(shape.fill(Color(uiColor: special ? c.specialFill : c.fill)))
+            .overlay(shape.strokeBorder(Color(uiColor: c.border), lineWidth: c.borderWidth))
+            .shadow(color: Color(uiColor: c.shadowColor).opacity(Double(c.shadowOpacity)), radius: c.shadowRadius, y: c.shadowOffsetY)
+    }
+}
+
+/// Kleine Vorschau eines Themes.
+struct ThemeThumbnail: View {
+    let theme: ThemePreset
+
+    var body: some View {
+        let dark = theme.backgroundStyle == "system" ? true : (theme.backgroundStyle == "gradient" ? theme.backgroundPreset != 5 : KeyStyleKit.luminance(Theme.uiColor(hex: theme.backgroundColorHex)) < 0.6)
+        let c = KeyStyleKit.colors(style: theme.keyStyle, dark: dark, tint: UIColor(Theme.tint(theme.tint)),
+                                   keyColor: Theme.uiColor(hex: theme.keyColorHex),
+                                   textColor: theme.textColorHex.isEmpty ? nil : Theme.uiColor(hex: theme.textColorHex),
+                                   opacity: theme.opacity)
+        ZStack {
+            background
+            VStack(spacing: 4) {
+                ForEach(0..<3, id: \.self) { _ in
+                    HStack(spacing: 3) {
+                        ForEach(0..<6, id: \.self) { _ in
+                            RoundedRectangle(cornerRadius: c.capsule ? 5 : min(theme.radius / 3, 4), style: .continuous)
+                                .fill(Color(uiColor: c.fill))
+                                .overlay(RoundedRectangle(cornerRadius: c.capsule ? 5 : min(theme.radius / 3, 4), style: .continuous)
+                                    .strokeBorder(Color(uiColor: c.border), lineWidth: c.borderWidth * 0.6))
+                                .frame(height: 12)
+                        }
+                    }
+                }
+            }
+            .padding(8)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    @ViewBuilder
+    private var background: some View {
+        switch theme.backgroundStyle {
+        case "gradient":
+            LinearGradient(colors: Theme.backgroundPresets[min(theme.backgroundPreset, Theme.backgroundPresets.count - 1)].colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+        case "color":
+            Theme.color(hex: theme.backgroundColorHex)
+        default:
+            LinearGradient(colors: [Color(white: 0.16), Color(white: 0.10)], startPoint: .top, endPoint: .bottom)
+        }
     }
 }

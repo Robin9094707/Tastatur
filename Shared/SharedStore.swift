@@ -78,6 +78,15 @@ final class SharedStore: ObservableObject {
     @Published var keyCornerRadius: Double = 8.5 { didSet { set(keyCornerRadius, "keyCornerRadius") } }
     @Published var keyFontScale: Double = 1.0 { didSet { set(keyFontScale, "keyFontScale") } }
     @Published var backgroundVersion: Int = 0 { didSet { set(backgroundVersion, "backgroundVersion") } }
+    @Published var keyStyle: String = "glass" { didSet { set(keyStyle, "keyStyle") } }
+    @Published var keyColorHex: String = "#FFFFFF" { didSet { set(keyColorHex, "keyColorHex") } }
+    @Published var keyTextColorHex: String = "" { didSet { set(keyTextColorHex, "keyTextColorHex") } }
+    @Published var keyFontDesign: String = "default" { didSet { set(keyFontDesign, "keyFontDesign") } }
+    @Published var themeID: String = "" { didSet { set(themeID, "themeID") } }
+
+    // Tippkontrolle
+    @Published var smartTouch: Bool = true { didSet { set(smartTouch, "smartTouch") } }
+    @Published var liveAICorrection: Bool = true { didSet { set(liveAICorrection, "liveAICorrection") } }
 
     // Emojis
     @Published var emojiRecents: [String] = [] { didSet { setCodable(emojiRecents, "emojiRecents") } }
@@ -90,45 +99,57 @@ final class SharedStore: ObservableObject {
         defer { loading = false }
         let d = defaults
         migrateIfNeeded()
-        apiKey = d.string(forKey: "apiKey") ?? ""
-        baseURL = d.string(forKey: "baseURL") ?? "https://api.openai.com/v1"
-        chatModel = d.string(forKey: "chatModel") ?? SharedStore.defaultChatModel
-        fastModel = d.string(forKey: "fastModel") ?? SharedStore.defaultChatModel
-        reasoningEffort = d.string(forKey: "reasoningEffort") ?? "low"
-        knownModels = getCodable("knownModels") ?? []
-        streamResponses = bool("streamResponses", true)
-        outputLanguage = d.string(forKey: "outputLanguage") ?? "auto"
-        personalContext = d.string(forKey: "personalContext") ?? ""
-        writingStyle = d.string(forKey: "writingStyle") ?? ""
-        profiles = getCodable("profiles") ?? ContextProfile.defaults
-        activeProfileID = d.string(forKey: "activeProfileID") ?? ""
-        aiScope = AIScope(rawValue: d.string(forKey: "aiScope") ?? "") ?? .auto
-        useAppContext = bool("useAppContext", true)
-        actions = getCodable("actions") ?? AIAction.defaults
-        macros = getCodable("macros") ?? Macro.defaults
-        macroAutoExpand = bool("macroAutoExpand", true)
-        clipboardEnabled = bool("clipboardEnabled", true)
-        clipboardLimit = d.object(forKey: "clipboardLimit") as? Int ?? 50
-        haptics = bool("haptics", true)
-        keySound = bool("keySound", true)
-        keyPopups = bool("keyPopups", true)
-        autocorrect = bool("autocorrect", true)
-        autocapitalize = bool("autocapitalize", true)
-        doubleSpacePeriod = bool("doubleSpacePeriod", true)
-        aiSuggestions = bool("aiSuggestions", true)
-        learnWords = bool("learnWords", true)
-        showNumberRow = bool("showNumberRow", false)
-        keyboardTint = d.object(forKey: "keyboardTint") as? Int ?? 0
-        backgroundStyle = d.string(forKey: "backgroundStyle") ?? "system"
-        backgroundPreset = d.object(forKey: "backgroundPreset") as? Int ?? 0
-        backgroundColorHex = d.string(forKey: "backgroundColorHex") ?? "#3A2E8C"
-        backgroundDim = d.object(forKey: "backgroundDim") as? Double ?? 0.25
-        keyOpacity = d.object(forKey: "keyOpacity") as? Double ?? 1.0
-        keyCornerRadius = d.object(forKey: "keyCornerRadius") as? Double ?? 8.5
-        keyFontScale = d.object(forKey: "keyFontScale") as? Double ?? 1.0
-        backgroundVersion = d.object(forKey: "backgroundVersion") as? Int ?? 0
-        emojiRecents = getCodable("emojiRecents") ?? []
-        emojiFavorites = getCodable("emojiFavorites") ?? ["❤️", "😂", "👍", "🙏", "🔥", "✨"]
+        upd(\.apiKey, d.string(forKey: "apiKey") ?? "")
+        upd(\.baseURL, d.string(forKey: "baseURL") ?? "https://api.openai.com/v1")
+        upd(\.chatModel, d.string(forKey: "chatModel") ?? SharedStore.defaultChatModel)
+        upd(\.fastModel, d.string(forKey: "fastModel") ?? SharedStore.defaultChatModel)
+        upd(\.reasoningEffort, d.string(forKey: "reasoningEffort") ?? "low")
+        upd(\.knownModels, getCodable("knownModels") ?? [])
+        upd(\.streamResponses, bool("streamResponses", true))
+        upd(\.outputLanguage, d.string(forKey: "outputLanguage") ?? "auto")
+        upd(\.personalContext, d.string(forKey: "personalContext") ?? "")
+        upd(\.writingStyle, d.string(forKey: "writingStyle") ?? "")
+        upd(\.profiles, getCodable("profiles") ?? ContextProfile.defaults)
+        upd(\.activeProfileID, d.string(forKey: "activeProfileID") ?? "")
+        upd(\.aiScope, AIScope(rawValue: d.string(forKey: "aiScope") ?? "") ?? .auto)
+        upd(\.useAppContext, bool("useAppContext", true))
+        upd(\.actions, getCodable("actions") ?? AIAction.defaults)
+        upd(\.macros, getCodable("macros") ?? Macro.defaults)
+        upd(\.macroAutoExpand, bool("macroAutoExpand", true))
+        upd(\.clipboardEnabled, bool("clipboardEnabled", true))
+        upd(\.clipboardLimit, d.object(forKey: "clipboardLimit") as? Int ?? 50)
+        upd(\.haptics, bool("haptics", true))
+        upd(\.keySound, bool("keySound", true))
+        upd(\.keyPopups, bool("keyPopups", true))
+        upd(\.autocorrect, bool("autocorrect", true))
+        upd(\.autocapitalize, bool("autocapitalize", true))
+        upd(\.doubleSpacePeriod, bool("doubleSpacePeriod", true))
+        upd(\.aiSuggestions, bool("aiSuggestions", true))
+        upd(\.learnWords, bool("learnWords", true))
+        upd(\.showNumberRow, bool("showNumberRow", false))
+        upd(\.keyboardTint, d.object(forKey: "keyboardTint") as? Int ?? 0)
+        upd(\.backgroundStyle, d.string(forKey: "backgroundStyle") ?? "system")
+        upd(\.backgroundPreset, d.object(forKey: "backgroundPreset") as? Int ?? 0)
+        upd(\.backgroundColorHex, d.string(forKey: "backgroundColorHex") ?? "#3A2E8C")
+        upd(\.backgroundDim, d.object(forKey: "backgroundDim") as? Double ?? 0.25)
+        upd(\.keyOpacity, d.object(forKey: "keyOpacity") as? Double ?? 1.0)
+        upd(\.keyCornerRadius, d.object(forKey: "keyCornerRadius") as? Double ?? 8.5)
+        upd(\.keyFontScale, d.object(forKey: "keyFontScale") as? Double ?? 1.0)
+        upd(\.backgroundVersion, d.object(forKey: "backgroundVersion") as? Int ?? 0)
+        upd(\.emojiRecents, getCodable("emojiRecents") ?? [])
+        upd(\.emojiFavorites, getCodable("emojiFavorites") ?? ["❤️", "😂", "👍", "🙏", "🔥", "✨"])
+        upd(\.keyStyle, d.string(forKey: "keyStyle") ?? "glass")
+        upd(\.keyColorHex, d.string(forKey: "keyColorHex") ?? "#FFFFFF")
+        upd(\.keyTextColorHex, d.string(forKey: "keyTextColorHex") ?? "")
+        upd(\.keyFontDesign, d.string(forKey: "keyFontDesign") ?? "default")
+        upd(\.themeID, d.string(forKey: "themeID") ?? "")
+        upd(\.smartTouch, bool("smartTouch", true))
+        upd(\.liveAICorrection, bool("liveAICorrection", true))
+    }
+
+    /// Setzt einen Wert nur, wenn er sich geändert hat (vermeidet unnötiges Neuzeichnen).
+    private func upd<T: Equatable>(_ kp: ReferenceWritableKeyPath<SharedStore, T>, _ value: T) {
+        if self[keyPath: kp] != value { self[keyPath: kp] = value }
     }
 
     // MARK: - Hintergrundbild

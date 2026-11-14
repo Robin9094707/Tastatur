@@ -38,6 +38,21 @@ final class KeyboardState: ObservableObject {
     @Published var suggestions: [Suggestion] = []
     @Published var aiPhrase: Suggestion?
     @Published var aiThinking = false
+    @Published var liveFix: LiveFix?
+    private var liveCheckWork: DispatchWorkItem?
+    private var liveCheckPending = false
+    private var wordsSinceCheck = 0
+    private var liveEditing = false
+    private var neverFix = Set<String>()
+    private var liveFixHideWork: DispatchWorkItem?
+
+    struct LiveFix: Equatable {
+        var pairs: [Pair]
+        struct Pair: Equatable { var wrong: String; var right: String }
+        var label: String {
+            pairs.count == 1 ? "\(pairs[0].wrong) → \(pairs[0].right)" : "\(pairs.count) Tippfehler korrigiert"
+        }
+    }
     private var predictionCache: [String: OpenAIClient.Prediction] = [:]
     private var predictionOrder: [String] = []
     @Published var hasFullAccess = false
@@ -85,7 +100,9 @@ final class KeyboardState: ObservableObject {
     let toolbarHeight: CGFloat = 48
     var keyRowHeight: CGFloat {
         let size = controller?.view.window?.windowScene?.screen.bounds.size ?? UIScreen.main.bounds.size
-        return size.width > size.height ? 40 : 54
+        let landscape = size.width > size.height
+        if UIDevice.current.userInterfaceIdiom == .pad { return landscape ? 60 : 64 }
+        return landscape ? 40 : 55
     }
     var rowCount: Int { store.showNumberRow && layer == .letters ? 5 : 4 }
     var keysHeight: CGFloat { CGFloat(rowCount) * keyRowHeight + 8 }
@@ -337,6 +354,13 @@ final class KeyboardState: ObservableObject {
     }
 
     private func afterCommit() {
+        if !liveEditing {
+            wordsSinceCheck += 1
+            let last = before.last
+            if wordsSinceCheck >= 3 || (last != nil && ".!?\n".contains(last!)) && wordsSinceCheck >= 1 {
+                liveCheckPending = true
+            }
+        }
         if layer != .letters { layer = .letters }
         if shift == .on { shift = .off }
         updateAutoShift()
@@ -456,6 +480,10 @@ final class KeyboardState: ObservableObject {
     // MARK: - Vorschläge (entkoppelt vom Tippen)
 
     func scheduleRefresh() {
+        if !liveEditing {
+            liveCheckWork?.cancel()
+            if liveCheckPending { scheduleLiveCheck() }
+        }
         refreshWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.refreshSuggestionsNow() }
         refreshWork = work
@@ -1021,6 +1049,129 @@ final class KeyboardState: ObservableObject {
     func openApp(_ path: String = "") {
         if let url = URL(string: "tastatur://\(path)") { controller?.openURL(url) }
     }
+
+    // MARK: - KI-Live-Korrektur
+
+    private func scheduleLiveCheck() {
+        liveCheckWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.runLiveCheck() }
+        liveCheckWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4, execute: work)
+    }
+
+    private func runLiveCheck() {
+        guard store.liveAICorrection, hasFullAccess, store.hasAPIKey, panel == .none, !composeMode, shouldAutocorrect else { return }
+        let snapshot = before
+        guard let last = snapshot.last, !(last.isLetter || last.isNumber) else { return }
+        let region = String(snapshot.suffix(320))
+        guard region.wordCount >= 2 else { return }
+        liveCheckPending = false
+        wordsSinceCheck = 0
+        Task { [weak self] in
+            guard let self else { return }
+            guard let fixes = try? await self.client.typoCheck(text: region) else { return }
+            await self.applyLiveFixes(fixes, snapshot: snapshot, region: region)
+        }
+    }
+
+    @MainActor
+    private func applyLiveFixes(_ fixes: [OpenAIClient.TypoFix], snapshot: String, region: String) async {
+        guard before == snapshot, panel == .none, !composeMode else { return }
+        let words = Set(region.split { !($0.isLetter || $0.isNumber || $0 == "-") }.map(String.init))
+        let safe = fixes.filter { f in
+            f.confidence >= 0.9 && !f.wrong.isEmpty && !f.right.isEmpty && f.wrong != f.right
+                && !f.wrong.contains(" ") && !f.right.contains(" ")
+                && words.contains(f.wrong)
+                && !neverFix.contains(f.wrong.lowercased())
+                && !engine.isLearned(f.wrong)
+                && TextEngine.keyboardDistance(f.wrong.lowercased(), f.right.lowercased()) <= max(2, Double(f.wrong.count) / 3)
+        }
+        guard !safe.isEmpty else { return }
+        var applied: [LiveFix.Pair] = []
+        liveEditing = true
+        defer { liveEditing = false }
+        for f in safe.prefix(4) {
+            guard let ok = await replaceWordBeforeCursor(f.wrong, with: f.right), ok else { break }
+            applied.append(.init(wrong: f.wrong, right: f.right))
+            engine.learn(word: f.right, previous: nil)
+        }
+        guard !applied.isEmpty else { return }
+        store.incrementStat("corrections", by: applied.count)
+        showLiveFix(LiveFix(pairs: applied))
+    }
+
+    /// Ersetzt das letzte Vorkommen eines ganzen Wortes vor dem Cursor. nil = abgebrochen.
+    @MainActor
+    private func replaceWordBeforeCursor(_ wrong: String, with right: String) async -> Bool? {
+        let text = before
+        guard let range = lastWholeWordRange(of: wrong, in: text) else { return false }
+        let tail = String(text[range.upperBound...])
+        let tailUTF16 = tail.utf16.count
+        if tailUTF16 > 0 {
+            proxy?.adjustTextPosition(byCharacterOffset: -tailUTF16)
+            await waitForContextChange(from: text)
+            guard before.hasSuffix(wrong) else {
+                // zurück an die alte Stelle
+                proxy?.adjustTextPosition(byCharacterOffset: tailUTF16)
+                return nil
+            }
+        }
+        deleteChars(wrong.count)
+        proxy?.insertText(right)
+        if tailUTF16 > 0 {
+            proxy?.adjustTextPosition(byCharacterOffset: tailUTF16)
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        return true
+    }
+
+    private func lastWholeWordRange(of word: String, in text: String) -> Range<String.Index>? {
+        var searchEnd = text.endIndex
+        while let r = text.range(of: word, options: .backwards, range: text.startIndex..<searchEnd) {
+            let beforeOK = r.lowerBound == text.startIndex || !(text[text.index(before: r.lowerBound)].isLetter || text[text.index(before: r.lowerBound)].isNumber)
+            let afterOK = r.upperBound == text.endIndex || !(text[r.upperBound].isLetter || text[r.upperBound].isNumber)
+            if beforeOK && afterOK { return r }
+            searchEnd = r.lowerBound
+        }
+        return nil
+    }
+
+    private func showLiveFix(_ fix: LiveFix) {
+        liveFix = fix
+        feedback(.light)
+        liveFixHideWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.liveFix = nil }
+        liveFixHideWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6, execute: work)
+    }
+
+    /// Macht die letzte Live-Korrektur rückgängig und merkt sich die Wörter.
+    func undoLiveFix() {
+        guard let fix = liveFix else { return }
+        liveFix = nil
+        feedback(.medium)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.liveEditing = true
+            defer { self.liveEditing = false }
+            for p in fix.pairs.reversed() {
+                _ = await self.replaceWordBeforeCursor(p.right, with: p.wrong)
+                self.neverFix.insert(p.wrong.lowercased())
+                self.engine.learn(word: p.wrong, previous: nil, weight: 3)
+            }
+        }
+    }
+
+    // MARK: - Intelligente Trefferzonen
+
+    /// Bewertet, ob ein Buchstabe das aktuelle Wort sinnvoll fortsetzt.
+    func isPlausibleContinuation(_ letter: String) -> Bool {
+        let word = currentWord
+        guard !word.isEmpty else { return true }
+        return engine.isPlausiblePrefix(word + letter)
+    }
+
+    var currentWordIsEmpty: Bool { currentWord.isEmpty }
 
     // MARK: - Lokales Formatieren (ohne KI, sofort)
 

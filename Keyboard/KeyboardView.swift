@@ -128,7 +128,24 @@ struct Toolbar: View {
 
     private var suggestionBar: some View {
         HStack(spacing: 0) {
-            if state.suggestions.isEmpty && state.aiPhrase == nil {
+            if let fix = state.liveFix {
+                Button { state.undoLiveFix() } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.seal.fill").foregroundStyle(state.tint)
+                        Text(fix.label).lineLimit(1).minimumScaleFactor(0.7)
+                        Spacer(minLength: 4)
+                        Label("Rückgängig", systemImage: "arrow.uturn.backward")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.system(size: 14, weight: .medium))
+                    .padding(.horizontal, 12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            } else if state.suggestions.isEmpty && state.aiPhrase == nil {
                 Spacer()
                 if let profile = state.store.activeProfile {
                     Text("\(profile.emoji) \(profile.name)")
@@ -167,6 +184,7 @@ struct Toolbar: View {
             }
         }
         .animation(.easeOut(duration: 0.18), value: state.aiPhrase?.text)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: state.liveFix)
         .frame(height: 38)
         .glassCapsule(force: true)
     }

@@ -28,8 +28,49 @@ final class TextEngine {
                 for (k, v) in words { self.learned[k, default: 0] += v }
                 for (k, v) in grams { self.bigrams[k] = (self.bigrams[k] ?? [:]).merging(v, uniquingKeysWith: +) }
                 self.loaded = true
+                self.buildPrefixes()
             }
         }
+    }
+
+    // MARK: - Präfixe für intelligente Trefferzonen
+
+    private var prefixes = Set<String>()
+    private var plausibleCache: [String: Bool] = [:]
+
+    private func buildPrefixes() {
+        let words = CommonWords.german + Array(learned.keys)
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            var set = Set<String>()
+            for w in words {
+                let lw = w.lowercased()
+                var p = ""
+                for ch in lw.prefix(16) { p.append(ch); set.insert(p) }
+            }
+            DispatchQueue.main.async { self?.prefixes.formUnion(set) }
+        }
+    }
+
+    /// Kann `prefix` der Anfang eines echten Wortes sein?
+    func isPlausiblePrefix(_ prefix: String) -> Bool {
+        let p = prefix.lowercased()
+        if p.count <= 1 { return true }
+        if prefixes.contains(p) { return true }
+        if let c = plausibleCache[p] { return c }
+        if !warmedUp { warmUp() }
+        let ns = p as NSString
+        let range = NSRange(location: 0, length: ns.length)
+        var ok = !(checker.completions(forPartialWordRange: range, in: p, language: language) ?? []).isEmpty
+        if !ok {
+            ok = checker.rangeOfMisspelledWord(in: p, range: range, startingAt: 0, wrap: false, language: language).location == NSNotFound
+        }
+        if plausibleCache.count > 3000 { plausibleCache.removeAll() }
+        plausibleCache[p] = ok
+        return ok
+    }
+
+    func isLearned(_ word: String) -> Bool {
+        learned[word] != nil || learned[word.lowercased()] != nil
     }
 
     /// Lädt das Systemwörterbuch einmalig vor (erste Abfrage ist sonst spürbar langsam).
@@ -138,19 +179,19 @@ final class TextEngine {
             if missEN.location == NSNotFound { return nil }
         }
         let guesses = checker.guesses(forWordRange: range, in: word, language: language) ?? []
-        let maxDist = word.count <= 4 ? 1 : 2
-        // Bevorzuge häufige Wörter
-        let ranked = guesses.prefix(6).sorted { a, b in
-            let ca = CommonWords.rank[a.lowercased()] ?? Int.max
-            let cb = CommonWords.rank[b.lowercased()] ?? Int.max
-            if ca != cb { return ca < cb }
-            return false
-        }
-        for g in ranked {
-            if g.contains(" ") { continue }
-            if Self.distance(word.lowercased(), g.lowercased()) <= maxDist {
-                return matchCase(of: word, g).replacingFirstCaseIfNoun(original: word, guess: g)
+        let maxDist: Double = word.count <= 4 ? 1 : 2
+        let lw = word.lowercased()
+        var best: (String, Double, Int)?
+        for g in guesses.prefix(8) where !g.contains(" ") {
+            let d = Self.keyboardDistance(lw, g.lowercased())
+            guard d <= maxDist else { continue }
+            let rank = CommonWords.rank[g.lowercased()] ?? Int.max
+            if best == nil || d < best!.1 - 0.01 || (abs(d - best!.1) < 0.01 && rank < best!.2) {
+                best = (g, d, rank)
             }
+        }
+        if let best {
+            return matchCase(of: word, best.0).replacingFirstCaseIfNoun(original: word, guess: best.0)
         }
         return nil
     }
@@ -161,6 +202,8 @@ final class TextEngine {
         guard store.learnWords, word.count >= 2, word.count <= 40,
               word.rangeOfCharacter(from: .letters) != nil else { return }
         learned[word, default: 0] += weight
+        var p = ""
+        for ch in word.lowercased().prefix(16) { p.append(ch); prefixes.insert(p) }
         if let prev = previous?.lowercased(), !prev.isEmpty {
             bigrams[prev, default: [:]][word, default: 0] += weight
             if let count = bigrams[prev]?.count, count > 30 {
@@ -196,6 +239,55 @@ final class TextEngine {
 
     private static func saveBigrams(_ b: [String: [String: Int]]) {
         if let data = try? JSONEncoder().encode(b) { try? data.write(to: bigramURL, options: .atomic) }
+    }
+
+    // MARK: - Tastatur-gewichtete Distanz
+
+    /// Nachbartasten auf QWERTZ – Vertipper dorthin kosten weniger.
+    private static let neighbors: [Character: Set<Character>] = {
+        let rows: [[Character]] = [Array("qwertzuiopü"), Array("asdfghjklöä"), Array("yxcvbnm")]
+        var map: [Character: Set<Character>] = [:]
+        for (r, row) in rows.enumerated() {
+            for (i, ch) in row.enumerated() {
+                var n = Set<Character>()
+                if i > 0 { n.insert(row[i - 1]) }
+                if i < row.count - 1 { n.insert(row[i + 1]) }
+                for rr in [r - 1, r + 1] where rr >= 0 && rr < rows.count {
+                    let other = rows[rr]
+                    let offset = rr > r ? (r == 1 ? 1 : 0) : (r == 2 ? 1 : 0)
+                    for j in [i - 1 + offset, i + offset] where j >= 0 && j < other.count { n.insert(other[j]) }
+                }
+                map[ch] = n
+            }
+        }
+        map["ä"]?.insert("a"); map["ö"]?.insert("o"); map["ü"]?.insert("u")
+        map["a"]?.insert("ä"); map["o"]?.insert("ö"); map["u"]?.insert("ü"); map["s"]?.insert("ß")
+        return map
+    }()
+
+    static func keyboardDistance(_ a: String, _ b: String) -> Double {
+        let a = Array(a), b = Array(b)
+        if a.isEmpty { return Double(b.count) }
+        if b.isEmpty { return Double(a.count) }
+        var prev = (0...b.count).map { Double($0) }
+        var cur = [Double](repeating: 0, count: b.count + 1)
+        var prevPrev = prev
+        for i in 1...a.count {
+            cur[0] = Double(i)
+            for j in 1...b.count {
+                let sub: Double
+                if a[i - 1] == b[j - 1] { sub = 0 }
+                else if neighbors[a[i - 1]]?.contains(b[j - 1]) == true { sub = 0.5 }
+                else { sub = 1 }
+                var v = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + sub)
+                // Buchstabendreher (z. B. „dei“ → „die“)
+                if i > 1, j > 1, a[i - 1] == b[j - 2], a[i - 2] == b[j - 1] { v = min(v, prevPrev[j - 2] + 0.5) }
+                cur[j] = v
+            }
+            prevPrev = prev
+            prev = cur
+        }
+        return prev[b.count]
     }
 
     // MARK: - Levenshtein

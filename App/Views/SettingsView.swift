@@ -7,13 +7,17 @@ struct SettingsView: View {
 
     var body: some View {
         List {
-            Section("Tippen") {
+            Section {
                 Toggle(isOn: $store.aiSuggestions) { Label("KI-Vorschläge & Satzfortsetzung", systemImage: "sparkles") }
                 Toggle(isOn: $store.autocorrect) { Label("Autokorrektur", systemImage: "textformat.abc.dottedunderline") }
+                Toggle(isOn: $store.smartTouch) { Label("Intelligente Trefferzonen", systemImage: "hand.point.up.braille") }
+                Toggle(isOn: $store.liveAICorrection) { Label("KI-Live-Korrektur", systemImage: "checkmark.seal") }
                 Toggle(isOn: $store.autocapitalize) { Label("Automatische Großschreibung", systemImage: "textformat.size.larger") }
                 Toggle(isOn: $store.doubleSpacePeriod) { Label("Punkt durch doppeltes Leerzeichen", systemImage: "circle.fill") }
                 Toggle(isOn: $store.learnWords) { Label("Neue Wörter lernen", systemImage: "brain") }
                 Toggle(isOn: $store.showNumberRow) { Label("Zahlenreihe anzeigen", systemImage: "number") }
+            } header: { Text("Tippen & Tippkontrolle") } footer: {
+                Text("Trefferzonen: Triffst du zwischen zwei Tasten, gewinnt der Buchstabe, der ein echtes Wort ergibt. KI-Live-Korrektur: Nach ein paar Wörtern und einer kurzen Pause werden nur eindeutige Tippfehler korrigiert – mit Rückgängig-Knopf in der Leiste.")
             }
             .glassRow()
 

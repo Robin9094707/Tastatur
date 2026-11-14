@@ -49,7 +49,19 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        applyAppearance()
         state?.appear()
+    }
+
+    /// Übernimmt Hell/Dunkel des Textfelds – wie die iOS-Tastatur.
+    private func applyAppearance() {
+        let style: UIUserInterfaceStyle
+        switch textDocumentProxy.keyboardAppearance {
+        case .dark?: style = .dark
+        case .light?: style = .light
+        default: style = .unspecified
+        }
+        if view.overrideUserInterfaceStyle != style { view.overrideUserInterfaceStyle = style }
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -59,6 +71,7 @@ final class KeyboardViewController: UIInputViewController {
 
     override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
+        applyAppearance()
         state?.textDidChange()
     }
 

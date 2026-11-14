@@ -19,6 +19,10 @@ struct KeysConfig: Equatable {
     var cornerRadius: CGFloat = 8.5
     var fontScale: CGFloat = 1
     var forceDark: Bool? = nil
+    var style: String = "glass"
+    var keyColorHex: String = "#FFFFFF"
+    var textColorHex: String = ""
+    var fontDesign: String = "default"
 }
 
 // MARK: - Einzelne Taste
@@ -66,6 +70,7 @@ final class KeyCapView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         cap.frame = bounds.insetBy(dx: 3, dy: 5.5)
+        if isCapsule { cap.layer.cornerRadius = min(cap.bounds.height, cap.bounds.width) / 2 }
         cap.layer.shadowPath = UIBezierPath(roundedRect: cap.bounds, cornerRadius: cap.layer.cornerRadius).cgPath
         label.frame = cap.bounds.insetBy(dx: 2, dy: 0)
         icon.frame = cap.bounds
@@ -78,37 +83,34 @@ final class KeyCapView: UIView {
         label.textColor = .label
         let sym = UIImage.SymbolConfiguration(pointSize: 18 * config.fontScale, weight: .regular)
         let fs = config.fontScale
-        if cap.layer.cornerRadius != config.cornerRadius {
+        if !isCapsule, cap.layer.cornerRadius != config.cornerRadius {
             cap.layer.cornerRadius = config.cornerRadius
             setNeedsLayout()
         }
         switch kind {
         case .char(let c):
             label.text = upper ? c.uppercased() : c
-            label.font = .systemFont(ofSize: (c.count > 1 ? 17 : 24) * fs, weight: .regular)
+            label.font = KeyStyleKit.font(size: (c.count > 1 ? 17 : 24) * fs, weight: .regular, design: config.fontDesign)
         case .shift:
             showIcon(config.shift == .caps ? "capslock.fill" : (config.shift == .on ? "shift.fill" : "shift"), sym)
-            icon.tintColor = config.shift != .off ? .black : .label
         case .delete:
             showIcon(isPressed ? "delete.left.fill" : "delete.left", sym)
         case .space:
             label.text = "Leerzeichen"
-            label.font = .systemFont(ofSize: 16)
-            label.textColor = .secondaryLabel
+            label.font = KeyStyleKit.font(size: 15 * fs, weight: .regular, design: config.fontDesign)
         case .returnKey:
             if config.returnTitle == "⏎" {
                 showIcon("return", sym)
             } else {
                 label.text = config.returnTitle
-                label.font = .systemFont(ofSize: 16, weight: .semibold)
-                label.textColor = .white
+                label.font = KeyStyleKit.font(size: 16 * fs, weight: .semibold, design: config.fontDesign)
             }
         case .numbers:
-            label.text = "123"; label.font = .systemFont(ofSize: 16)
+            label.text = "123"; label.font = KeyStyleKit.font(size: 16 * fs, weight: .regular, design: config.fontDesign)
         case .letters:
-            label.text = "ABC"; label.font = .systemFont(ofSize: 16)
+            label.text = "ABC"; label.font = KeyStyleKit.font(size: 16 * fs, weight: .regular, design: config.fontDesign)
         case .symbols:
-            label.text = "#+="; label.font = .systemFont(ofSize: 16)
+            label.text = "#+="; label.font = KeyStyleKit.font(size: 16 * fs, weight: .regular, design: config.fontDesign)
         case .globe:
             showIcon("globe", sym)
         case .emoji:
@@ -121,37 +123,67 @@ final class KeyCapView: UIView {
         label.isHidden = true
         icon.isHidden = false
         icon.image = UIImage(systemName: name, withConfiguration: cfg)
-        icon.tintColor = .label
     }
 
     private var lastConfig: KeysConfig?
     private var lastDark = false
 
+    private var cachedColors: KeyColors?
+    private var cachedKey = ""
+
     func applyColors(config: KeysConfig, dark: Bool) {
         lastConfig = config
         lastDark = dark
-        cap.layer.shadowOpacity = Float((dark ? 0.45 : 0.25) * config.keyOpacity)
-        cap.alpha = 1
+        let style = KeyStyle(rawValue: config.style) ?? .glass
+        let cacheKey = "\(config.style)|\(dark)|\(config.tintIndex)|\(config.keyColorHex)|\(config.textColorHex)|\(config.keyOpacity)"
+        let colors: KeyColors
+        if let c = cachedColors, cachedKey == cacheKey {
+            colors = c
+        } else {
+            colors = KeyStyleKit.colors(style: style, dark: dark, tint: tint,
+                                        keyColor: Theme.uiColor(hex: config.keyColorHex),
+                                        textColor: config.textColorHex.isEmpty ? nil : Theme.uiColor(hex: config.textColorHex),
+                                        opacity: config.keyOpacity)
+            cachedColors = colors
+            cachedKey = cacheKey
+        }
+        let wantsCapsule = colors.capsule
+        if wantsCapsule != isCapsule {
+            isCapsule = wantsCapsule
+            setNeedsLayout()
+        }
+        cap.layer.shadowColor = colors.shadowColor.cgColor
+        cap.layer.shadowOpacity = colors.shadowOpacity
+        cap.layer.shadowRadius = colors.shadowRadius
+        cap.layer.shadowOffset = CGSize(width: 0, height: colors.shadowOffsetY)
+        cap.layer.borderColor = colors.border.cgColor
+        cap.layer.borderWidth = colors.borderWidth
+
+        var textColor = isSpecial ? colors.specialText : colors.text
         if case .returnKey = kind, config.returnTitle != "⏎" {
             cap.backgroundColor = tint.withAlphaComponent(isPressed ? 0.6 : 0.95)
-            return
-        }
-        if case .shift = kind, config.shift != .off {
-            cap.backgroundColor = UIColor.white.withAlphaComponent(isPressed ? 0.7 : 0.95)
-            return
-        }
-        let k = config.keyOpacity
-        if dark {
-            let base: CGFloat = (isSpecial ? 0.13 : 0.30) * k
-            cap.backgroundColor = UIColor(white: 1, alpha: isPressed ? base + 0.25 : base)
+            textColor = .white
+        } else if case .shift = kind, config.shift != .off {
+            cap.backgroundColor = isPressed ? colors.fillPressed : (style == .neon ? tint.withAlphaComponent(0.5) : UIColor.white)
+            textColor = style == .neon ? .white : .black
+        } else if isSpecial {
+            cap.backgroundColor = isPressed ? colors.specialFillPressed : colors.specialFill
         } else {
-            if isSpecial {
-                cap.backgroundColor = UIColor(white: isPressed ? 0.98 : 0.68, alpha: 0.85 * k)
-            } else {
-                cap.backgroundColor = UIColor(white: isPressed ? 0.72 : 1.0, alpha: isPressed ? 0.95 : 0.95 * k)
-            }
+            cap.backgroundColor = isPressed ? colors.fillPressed : colors.fill
+        }
+        label.textColor = textColor
+        icon.tintColor = textColor
+        if style == .neon {
+            label.layer.shadowColor = tint.cgColor
+            label.layer.shadowRadius = 4
+            label.layer.shadowOpacity = 0.9
+            label.layer.shadowOffset = .zero
+        } else if label.layer.shadowOpacity != 0 {
+            label.layer.shadowOpacity = 0
         }
     }
+
+    private var isCapsule = false
 
     func setPressed(_ pressed: Bool) {
         guard pressed != isPressed else { return }
@@ -443,8 +475,7 @@ final class KeysView: UIView {
     override func touchesBegan(_ set: Set<UITouch>, with event: UIEvent?) {
         for t in set {
             let p = t.location(in: self)
-            guard let k = key(at: p) else { continue }
-            // Schnelles Tippen: vorherige Zeichen-Taste sofort auslösen (Rollover)
+            // Schnelles Tippen: vorherige Tasten zuerst auslösen (Rollover), damit die Reihenfolge stimmt
             for id in touchOrder {
                 guard let info = touches[id], !info.handled, !info.alternatesActive, !info.cursorMode else { continue }
                 switch info.key.kind {
@@ -452,12 +483,37 @@ final class KeysView: UIView {
                 default: break
                 }
             }
+            guard let k = smartKey(at: p) else { continue }
             let info = TouchInfo(key: k, startPoint: p)
             let id = ObjectIdentifier(t)
             touches[id] = info
             touchOrder.append(id)
             down(info)
         }
+    }
+
+    /// Intelligente Trefferzonen: Liegt die Berührung zwischen zwei Buchstaben,
+    /// gewinnt der, der ein echtes Wort ergibt (wie bei der iOS-Tastatur).
+    private func smartKey(at p: CGPoint) -> KeyCapView? {
+        guard let primary = key(at: p) else { return nil }
+        guard config?.layer == .letters, let state, state.store.smartTouch,
+              case .char(let pc) = primary.kind, pc.count == 1, pc.first?.isLetter == true,
+              !state.currentWordIsEmpty else { return primary }
+        let w = max(primary.frame.width, 1)
+        let h = max(primary.frame.height, 1)
+        let dPrimary = hypot((p.x - primary.frame.midX) / w, (p.y - primary.frame.midY) / h)
+        // Klar in der Mitte getroffen → nichts ändern
+        guard dPrimary > 0.3 else { return primary }
+        if state.isPlausibleContinuation(pc) { return primary }
+        var best: (KeyCapView, CGFloat)?
+        for k in keys where k !== primary {
+            guard case .char(let c) = k.kind, c.count == 1, c.first?.isLetter == true else { continue }
+            let d = hypot((p.x - k.frame.midX) / w, (p.y - k.frame.midY) / h)
+            guard d < 0.95 else { continue }
+            guard state.isPlausibleContinuation(c) else { continue }
+            if best == nil || d < best!.1 { best = (k, d) }
+        }
+        return best?.0 ?? primary
     }
 
     override func touchesMoved(_ set: Set<UITouch>, with event: UIEvent?) {
@@ -627,7 +683,9 @@ struct KeysRepresentable: UIViewRepresentable {
                            needsGlobe: state.needsGlobe, numberRow: store.showNumberRow,
                            tintIndex: store.keyboardTint, popups: store.keyPopups,
                            keyOpacity: CGFloat(store.keyOpacity), cornerRadius: CGFloat(store.keyCornerRadius),
-                           fontScale: CGFloat(store.keyFontScale), forceDark: Theme.backgroundIsDark(store)),
+                           fontScale: CGFloat(store.keyFontScale), forceDark: Theme.backgroundIsDark(store),
+                           style: store.keyStyle, keyColorHex: store.keyColorHex,
+                           textColorHex: store.keyTextColorHex, fontDesign: store.keyFontDesign),
                 rowHeight: state.keyRowHeight)
     }
 }

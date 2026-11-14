@@ -223,6 +223,34 @@ final class OpenAIClient {
         return Prediction(rest: rest, phrase: phrase, words: Array(words.prefix(3)))
     }
 
+    struct TypoFix {
+        var wrong: String
+        var right: String
+        var confidence: Double
+    }
+
+    /// Findet NUR eindeutige Tippfehler – für die Live-Korrektur beim Schreiben.
+    func typoCheck(text: String) async throws -> [TypoFix] {
+        let raw = try await chat(messages: [
+            ChatMessage(role: "system", content: """
+            Du bist die Tippfehler-Kontrolle einer Smartphone-Tastatur. Finde im Text NUR eindeutige Vertipper: vertauschte, fehlende, doppelte oder benachbarte falsche Buchstaben, fehlende Umlaute (z. B. „fur“ → „für“), offensichtlich falsche Groß-/Kleinschreibung bei Substantiven.
+            NICHT ändern: Stil, Grammatik-Umbauten, Wortwahl, Umgangssprache, Abkürzungen, Namen, Marken, Fachbegriffe, Fremdwörter, Emojis, absichtliche Schreibweisen.
+            Gib für jeden Fund an, wie sicher du bist (0–1). Nur wenn aus dem Kontext eindeutig klar ist, welches Wort gemeint war, ist die Sicherheit ≥ 0,9.
+            Antworte NUR mit JSON: {"fixes":[{"falsch":"…","richtig":"…","sicher":0.95}]} – bei keinen Fehlern {"fixes":[]}.
+            """),
+            ChatMessage(role: "user", content: text),
+        ], model: store.fastModel, stream: false, effort: "minimal")
+        guard let start = raw.firstIndex(of: "{"), let end = raw.lastIndex(of: "}"),
+              let data = String(raw[start...end]).data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let list = json["fixes"] as? [[String: Any]] else { return [] }
+        return list.compactMap { item in
+            guard let w = item["falsch"] as? String, let r = item["richtig"] as? String else { return nil }
+            let conf = (item["sicher"] as? Double) ?? (item["sicher"] as? NSNumber)?.doubleValue ?? 0
+            return TypoFix(wrong: w.trimmingCharacters(in: .whitespaces), right: r.trimmingCharacters(in: .whitespaces), confidence: conf)
+        }
+    }
+
     // MARK: - Chat mit Fallbacks
 
     func chat(messages: [ChatMessage], model: String? = nil, stream: Bool? = nil, effort: String? = nil, onPartial: ((String) -> Void)? = nil) async throws -> String {

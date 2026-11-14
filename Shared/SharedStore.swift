@@ -33,7 +33,7 @@ final class SharedStore: ObservableObject {
 
     static let defaultChatModel = "gpt-6-luna"
     static let fallbackModels = ["gpt-6-luna", "gpt-5.6-luna", "gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"]
-    static let settingsVersion = 6
+    static let settingsVersion = 7
 
     @Published var apiKey: String = "" { didSet { set(apiKey, "apiKey") } }
     @Published var baseURL: String = "https://api.openai.com/v1" { didSet { set(baseURL, "baseURL") } }
@@ -87,6 +87,8 @@ final class SharedStore: ObservableObject {
     // KI-Vorschläge: "manual" (Knopf), "occasional" (gelegentlich), "off"
     @Published var aiSuggestMode: String = "manual" { didSet { set(aiSuggestMode, "aiSuggestMode") } }
     @Published var translateTarget: String = "Englisch" { didSet { set(translateTarget, "translateTarget") } }
+    /// Übersetzen-Panel: Sprache antippen ersetzt sofort (ohne Ergebnis-Vorschau).
+    @Published var translateDirect: Bool = true { didSet { set(translateDirect, "translateDirect") } }
     @Published var commands: [SavedCommand] = SavedCommand.defaults { didSet { setCodable(commands, "commands") } }
     @Published var commandEdition: String = "Bedrock" { didSet { set(commandEdition, "commandEdition") } }
     @Published var toolbarItems: [String] = ToolItem.defaultOrder { didSet { setCodable(toolbarItems, "toolbarItems") } }
@@ -153,6 +155,7 @@ final class SharedStore: ObservableObject {
         upd(\.smartTouch, bool("smartTouch", true))
         upd(\.aiSuggestMode, d.string(forKey: "aiSuggestMode") ?? "manual")
         upd(\.translateTarget, d.string(forKey: "translateTarget") ?? "Englisch")
+        upd(\.translateDirect, d.object(forKey: "translateDirect") as? Bool ?? true)
         upd(\.commands, getCodable("commands") ?? SavedCommand.defaults)
         upd(\.commandEdition, d.string(forKey: "commandEdition") ?? "Bedrock")
         upd(\.toolbarItems, getCodable("toolbarItems") ?? ToolItem.defaultOrder)
@@ -225,6 +228,14 @@ final class SharedStore: ObservableObject {
         if version < 5 { d.set("manual", forKey: "aiSuggestMode") }
         if version < 6, let data = d.data(forKey: "toolbarItems"), var items = try? JSONDecoder().decode([String].self, from: data) {
             if !items.contains("commands") { items.insert("commands", at: min(2, items.count)) }
+            if let newData = try? JSONEncoder().encode(items) { d.set(newData, forKey: "toolbarItems") }
+        }
+        // v7: Ein-Klick-Übersetzen ins Englische direkt hinter „Übersetzen“
+        if version < 7, let data = d.data(forKey: "toolbarItems"), var items = try? JSONDecoder().decode([String].self, from: data) {
+            if !items.contains(where: { $0.hasPrefix(ToolItem.translatePrefix) }) {
+                let pos = items.firstIndex(of: "translate").map { $0 + 1 } ?? min(1, items.count)
+                items.insert(ToolItem.translateID("Englisch"), at: pos)
+            }
             if let newData = try? JSONEncoder().encode(items) { d.set(newData, forKey: "toolbarItems") }
         }
         for key in ["transcribeModel", "dictationLanguage", "dictationCleanup", "dictationVocabulary", "dictationSessionMinutes"] {

@@ -7,6 +7,20 @@ struct ToolItem: Identifiable, Hashable {
     let id: String
     let title: String
     let symbol: String
+    /// Optionales Emoji statt SF-Symbol (z. B. Flagge bei Sofort-Übersetzen).
+    var emoji: String? = nil
+
+    /// Präfix für Ein-Klick-Übersetzen, z. B. „tr:Englisch“.
+    static let translatePrefix = "tr:"
+
+    static func translateID(_ lang: String) -> String { translatePrefix + lang }
+
+    /// Zielsprache eines Sofort-Übersetzen-Knopfs (oder nil).
+    static func translateLanguage(_ id: String) -> String? {
+        guard id.hasPrefix(translatePrefix) else { return nil }
+        let lang = String(id.dropFirst(translatePrefix.count))
+        return Languages.all.contains { $0.name == lang } ? lang : nil
+    }
 
     static let all: [ToolItem] = [
         ToolItem(id: "ai", title: "KI", symbol: "wand.and.stars"),
@@ -28,9 +42,14 @@ struct ToolItem: Identifiable, Hashable {
         ToolItem(id: "hide", title: "Ausblenden", symbol: "keyboard.chevron.compact.down"),
     ]
 
-    static let defaultOrder = ["ai", "translate", "commands", "write", "clipboard", "stickers", "emoji", "cursor", "calc", "macros", "paste", "settings", "hide"]
+    static let defaultOrder = ["ai", "translate", "tr:Englisch", "commands", "write", "clipboard", "stickers", "emoji", "cursor", "calc", "macros", "paste", "settings", "hide"]
 
-    static func item(_ id: String) -> ToolItem? { all.first { $0.id == id } }
+    static func item(_ id: String) -> ToolItem? {
+        if let lang = translateLanguage(id) {
+            return ToolItem(id: id, title: lang, symbol: "character.bubble", emoji: Languages.flag(lang))
+        }
+        return all.first { $0.id == id }
+    }
 }
 
 /// Sprachen für den Übersetzungsmodus.

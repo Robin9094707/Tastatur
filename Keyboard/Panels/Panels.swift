@@ -909,8 +909,12 @@ struct KeyboardSettingsPanel: View {
             ForEach(Array(store.toolbarItems.enumerated()), id: \.element) { index, id in
                 if let item = ToolItem.item(id) {
                     HStack(spacing: 10) {
-                        Image(systemName: item.symbol).foregroundStyle(state.tint).frame(width: 22)
-                        Text(item.title).font(.footnote.weight(.semibold))
+                        if let emoji = item.emoji {
+                            Text(emoji).font(.system(size: 18)).frame(width: 22)
+                        } else {
+                            Image(systemName: item.symbol).foregroundStyle(state.tint).frame(width: 22)
+                        }
+                        Text(item.emoji != nil ? "Übersetzen → \(item.title)" : item.title).font(.footnote.weight(.semibold))
                         Spacer()
                         Button { moveTool(index, -1) } label: { Image(systemName: "chevron.up.circle.fill") }
                             .buttonStyle(.plain).disabled(index == 0).opacity(index == 0 ? 0.3 : 1)
@@ -943,6 +947,30 @@ struct KeyboardSettingsPanel: View {
                         }
                         .padding(8)
                         .glass(cornerRadius: 10)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Text("Sofort übersetzen – ein Tipp übersetzt & ersetzt den Text (oder die Markierung)")
+                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 6)], spacing: 6) {
+                ForEach(Languages.all, id: \.name) { lang in
+                    let id = ToolItem.translateID(lang.name)
+                    let active = store.toolbarItems.contains(id)
+                    Button {
+                        if active { store.toolbarItems.removeAll { $0 == id } } else { store.toolbarItems.append(id) }
+                        state.feedback()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(lang.flag).font(.system(size: 16))
+                            Text(lang.name).font(.caption.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.75)
+                            Spacer(minLength: 0)
+                            Image(systemName: active ? "checkmark.circle.fill" : "plus.circle")
+                                .foregroundStyle(active ? state.tint : Color.secondary)
+                        }
+                        .padding(.horizontal, 8)
+                        .frame(height: 34)
+                        .glass(cornerRadius: 10, tint: active ? state.tint.opacity(0.3) : nil, interactive: true)
                     }
                     .buttonStyle(.plain)
                 }
@@ -1279,9 +1307,13 @@ struct TranslatePanel: View {
                 Text(state.selected.isEmpty ? "Übersetzt den ganzen Text im Feld – tippe auf eine Sprache:" : "Übersetzt den markierten Text – tippe auf eine Sprache:")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Toggle(isOn: $store.translateDirect) {
+                    Text("Sofort ersetzen (ohne Vorschau)").font(.caption.weight(.semibold))
+                }
+                .tint(state.tint)
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 6)], spacing: 6) {
                     ForEach(Languages.all, id: \.name) { lang in
-                        Button { state.translateField(to: lang.name) } label: {
+                        Button { state.translateField(to: lang.name, direct: store.translateDirect) } label: {
                             HStack(spacing: 6) {
                                 Text(lang.flag).font(.system(size: 18))
                                 Text(lang.name).font(.footnote.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.8)
@@ -1293,6 +1325,18 @@ struct TranslatePanel: View {
                             .glass(cornerRadius: 12, tint: store.translateTarget == lang.name ? state.tint : nil, interactive: true)
                         }
                         .buttonStyle(.plain)
+                        .contextMenu {
+                            let id = ToolItem.translateID(lang.name)
+                            if store.toolbarItems.contains(id) {
+                                Button(role: .destructive) { store.toolbarItems.removeAll { $0 == id } } label: {
+                                    Label("Aus Schnellleiste entfernen", systemImage: "pin.slash")
+                                }
+                            } else {
+                                Button { store.toolbarItems.append(id); state.showToast("\(lang.flag) \(lang.name) in der Schnellleiste ✓") } label: {
+                                    Label("Als Ein-Klick-Knopf in die Schnellleiste", systemImage: "pin")
+                                }
+                            }
+                        }
                     }
                 }
                 HStack(spacing: 6) {

@@ -980,7 +980,7 @@ final class KeyboardState: ObservableObject {
     }
 
     /// Führt eine KI-Aktion mit vorheriger Quell-Ermittlung aus.
-    private func startAI(title: String, showDiff: Bool,
+    private func startAI(title: String, showDiff: Bool, autoApply: Bool = false,
                          source: @escaping () async -> (text: String, target: ReplaceTarget, context: String?)?,
                          work: @escaping (String, String?, @escaping (String) -> Void) async throws -> String) {
         aiTask?.cancel()
@@ -996,7 +996,7 @@ final class KeyboardState: ObservableObject {
         composeMode = false
         panel = .result
         store.incrementStat("aiActions")
-        lastRun = { [weak self] in self?.startAI(title: title, showDiff: showDiff, source: source, work: work) }
+        lastRun = { [weak self] in self?.startAI(title: title, showDiff: showDiff, autoApply: autoApply, source: source, work: work) }
         aiTask = Task { @MainActor [weak self] in
             guard let self else { return }
             guard let src = await source() else {
@@ -1015,6 +1015,11 @@ final class KeyboardState: ObservableObject {
             let words = src.text.wordCount
             self.aiStatus = words > 400 ? "KI liest \(words) Wörter …" : "KI schreibt …"
             await self.perform { partial in try await work(src.text, src.context, partial) }
+            // Ein-Klick-Aktionen: Ergebnis direkt einsetzen (bei Fehler bleibt das Ergebnis-Panel offen)
+            if autoApply, !Task.isCancelled, self.aiError == nil, !self.aiResult.isEmpty {
+                self.applyResult(replace: true)
+                self.showToast("Übersetzt ✓")
+            }
         }
     }
 
@@ -1650,12 +1655,14 @@ final class KeyboardState: ObservableObject {
     }
 
     /// Übersetzt den Text, der schon im Feld steht (oder die Markierung) – mit „Ersetzen“.
-    func translateField(to lang: String) {
+    /// `direct`: Ein-Klick – übersetzt und ersetzt den Text sofort, ohne Nachfrage.
+    func translateField(to lang: String, direct: Bool = false) {
         guard requireAI() else { return }
         store.translateTarget = lang
+        if direct { store.incrementStat("translations") }
         let fallback = lang == "Deutsch" ? "Englische" : "Deutsche"
         let instruction = "Übersetze den Text natürlich und idiomatisch ins \(lang) – so, wie ein Muttersprachler schreiben würde. Behalte Ton, Emojis, Zeilenumbrüche, Namen, Zahlen und Links bei. Ist der Text bereits auf \(lang), übersetze ihn stattdessen ins \(fallback). Gib nur die Übersetzung zurück."
-        startAI(title: "Übersetzung → \(Languages.flag(lang)) \(lang)", showDiff: false) { [weak self] in
+        startAI(title: "Übersetzung → \(Languages.flag(lang)) \(lang)", showDiff: false, autoApply: direct) { [weak self] in
             guard let self else { return nil }
             return await self.gatherSource(mode: .auto)
         } work: { [client = self.client] text, _, partial in
@@ -1794,7 +1801,8 @@ final class KeyboardState: ObservableObject {
         case "theme": randomTheme()
         case "settings": settingsPage = .main; toggle(.settings)
         case "hide": controller?.dismissKeyboard()
-        default: break
+        default:
+            if let lang = ToolItem.translateLanguage(id) { translateField(to: lang, direct: true) }
         }
     }
 

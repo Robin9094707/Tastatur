@@ -420,7 +420,7 @@ struct ToolStrip: View {
             GlassGroup(spacing: 6) {
                 HStack(spacing: 6) {
                     ForEach(store.toolbarItems.compactMap(ToolItem.item), id: \.id) { item in
-                        tool(item.title, item.symbol) { state.runTool(item.id) }
+                        tool(item.title, item.symbol, emoji: item.emoji) { state.runTool(item.id) }
                     }
                     tool("Anpassen", "slider.horizontal.3") {
                         state.settingsPage = .toolbar
@@ -432,10 +432,14 @@ struct ToolStrip: View {
         }
     }
 
-    private func tool(_ title: String, _ symbol: String, action: @escaping () -> Void) -> some View {
+    private func tool(_ title: String, _ symbol: String, emoji: String? = nil, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                Image(systemName: symbol)
+                if let emoji {
+                    Text(emoji).font(.system(size: 16))
+                } else {
+                    Image(systemName: symbol)
+                }
                 Text(title)
             }
             .font(.footnote.weight(.semibold))

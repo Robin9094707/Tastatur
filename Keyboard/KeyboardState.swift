@@ -274,7 +274,7 @@ final class KeyboardState: ObservableObject {
 
     func appear() {
         store.reload()
-        if store.swipeTyping { SwipeDecoder.shared.loadIfNeeded() }
+        if store.swipeTyping || store.tapCorrection { SwipeDecoder.shared.loadIfNeeded() }
         sourceMode = store.aiScope
         hasFullAccess = controller?.hasFullAccess ?? false
         needsGlobe = controller?.needsInputModeSwitchKey ?? true
@@ -836,7 +836,14 @@ final class KeyboardState: ObservableObject {
                 list.append(Suggestion(text: macro.shortcut, kind: .macro, display: "⚡︎ " + macro.title))
             }
             var correction: String?
-            if store.autocorrect, shouldAutocorrect, !looksLikeName(word) { correction = smartCorrection(for: word) }
+            if store.autocorrect, shouldAutocorrect, !looksLikeName(word) {
+                if let f = tapFix, f.word == word, let r = f.result, !engine.spelledCorrectly(word) {
+                    correction = casedTapResult(word, r)
+                } else {
+                    correction = engine.correction(for: word)
+                    scheduleTapFix(for: word)
+                }
+            }
             list.append(Suggestion(text: word, kind: .typed, display: "„\(word)“"))
             if let correction { list.append(Suggestion(text: correction, kind: .correction)) }
             for c in engine.completions(prefix: word, previousWord: previousWord, limit: 3) where !list.contains(where: { $0.text == c }) {
@@ -2504,25 +2511,70 @@ final class KeyboardState: ObservableObject {
         return engine.isKnown(w) || SwipeDecoder.shared.rank(of: w) != nil
     }
 
-    /// Korrektur über die echten Fingerpositionen (stärker als reine Buchstaben-Ähnlichkeit),
-    /// sonst die klassische Autokorrektur.
-    func smartCorrection(for word: String) -> String? {
+    private struct TapInputs {
+        var lower: String
+        var taps: [CGPoint]
+        var geo: KeyGeometry
+        var learned: [String: Int]
+        var context: [String: Int]
+    }
+    /// Im Hintergrund berechnete Tipp-Korrektur für das aktuelle Wort.
+    private var tapFix: (word: String, result: String?)?
+    private let tapQueue = DispatchQueue(label: "de.tastatur.tapfix", qos: .userInitiated)
+    private var tapFixPending = ""
+
+    /// Schnelle Vorprüfung (ohne Wörterbuch-Abfragen): Kommt eine Tipp-Korrektur überhaupt infrage?
+    private func tapInputs(for word: String) -> TapInputs? {
+        guard store.tapCorrection, let geo = keyGeometry, wordTaps.count == word.count, word.count >= 2, wordTapsValid,
+              word.allSatisfy({ $0.isLetter }), !(word.count > 1 && word == word.uppercased()),
+              SwipeDecoder.shared.ready else { return nil }
         let lower = word.lowercased()
-        if store.tapCorrection, let geo = keyGeometry, wordTaps.count == word.count, word.count >= 2, wordTapsValid,
-           word.allSatisfy({ $0.isLetter }), !(word.count > 1 && word == word.uppercased()),
-           !engine.isKnown(word), SwipeDecoder.shared.rank(of: lower) == nil, !engine.spelledCorrectly(word) {
-            SwipeDecoder.shared.loadIfNeeded()
-            let prev = previousWord?.lowercased() ?? ""
-            let engine = self.engine
-            let ctx: (String) -> Double = prev.isEmpty ? { _ in 0 } : { w in Double(min(engine.bigramCount(prev, w), 8)) * 0.08 }
-            if let r = SwipeDecoder.shared.tapCorrect(typed: lower, taps: wordTaps, centers: geo.centers, kw: geo.keyWidth,
-                                                       learned: engine.swipeLearned(), context: ctx),
-               r.word != lower, r.spatial <= 2.2 + Double(word.count) * 0.15 {
-                let cased = word.first?.isUppercase == true ? engine.casedLike(word, r.word) : engine.swipeCased(r.word)
-                return cased
-            }
+        guard SwipeDecoder.shared.rank(of: lower) == nil, !engine.isKnown(word) else { return nil }
+        return TapInputs(lower: lower, taps: wordTaps, geo: geo, learned: engine.swipeLearned(),
+                         context: previousWord.map { engine.bigramNext($0) } ?? [:])
+    }
+
+    private static func computeTap(_ i: TapInputs) -> String? {
+        guard let r = SwipeDecoder.shared.tapCorrect(typed: i.lower, taps: i.taps, centers: i.geo.centers, kw: i.geo.keyWidth,
+                                                      learned: i.learned, context: i.context),
+              r.word != i.lower, r.spatial <= 2.2 + Double(i.lower.count) * 0.15 else { return nil }
+        return r.word
+    }
+
+    private func casedTapResult(_ typed: String, _ result: String) -> String {
+        typed.first?.isUppercase == true ? engine.casedLike(typed, result) : engine.swipeCased(result)
+    }
+
+    /// Korrektur beim Abschließen eines Wortes: zuerst über die Fingerpositionen, sonst klassisch.
+    func smartCorrection(for word: String) -> String? {
+        if let inputs = tapInputs(for: word), !engine.spelledCorrectly(word) {
+            let result: String?
+            if let f = tapFix, f.word == word { result = f.result } else { result = Self.computeTap(inputs) }
+            if let result { return casedTapResult(word, result) }
         }
         return engine.correction(for: word)
+    }
+
+    /// Berechnet die Tipp-Korrektur im Hintergrund und zeigt sie dann in der Leiste (blockiert das Tippen nie).
+    private func scheduleTapFix(for word: String) {
+        guard tapFix?.word != word, tapFixPending != word, let inputs = tapInputs(for: word) else { return }
+        tapFixPending = word
+        tapQueue.async { [weak self] in
+            let result = Self.computeTap(inputs)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if self.tapFixPending == word { self.tapFixPending = "" }
+                guard self.currentWord == word else { return }
+                self.tapFix = (word, result)
+                guard let result, !self.engine.spelledCorrectly(word) else { return }
+                let cased = self.casedTapResult(word, result)
+                var list = self.suggestions.filter { $0.kind != .correction && $0.text != cased }
+                let pos = list.firstIndex { $0.kind == .typed }.map { $0 + 1 } ?? 0
+                list.insert(Suggestion(text: cased, kind: .correction), at: min(pos, list.count))
+                let newList = Array(list.prefix(3))
+                if newList.map(\.text) != self.suggestions.map(\.text) { self.suggestions = newList }
+            }
+        }
     }
 
     /// Merkt sich, wo du die Tasten eines richtig getippten Wortes getroffen hast.

@@ -219,8 +219,18 @@ final class TextEngine {
         return out
     }
 
-    /// Richtig geschrieben laut Systemwörterbuch (Deutsch oder Englisch)?
+    private var spelledCache: [String: Bool] = [:]
+
+    /// Richtig geschrieben laut Systemwörterbuch (Deutsch oder Englisch)? Mit Zwischenspeicher.
     func spelledCorrectly(_ word: String) -> Bool {
+        if let c = spelledCache[word] { return c }
+        let r = spelledCorrectlyUncached(word)
+        if spelledCache.count > 1500 { spelledCache.removeAll() }
+        spelledCache[word] = r
+        return r
+    }
+
+    private func spelledCorrectlyUncached(_ word: String) -> Bool {
         let ns = word as NSString
         let range = NSRange(location: 0, length: ns.length)
         if checker.rangeOfMisspelledWord(in: word, range: range, startingAt: 0, wrap: false, language: language).location == NSNotFound { return true }
@@ -231,6 +241,14 @@ final class TextEngine {
     }
 
     func casedLike(_ typed: String, _ word: String) -> String { matchCase(of: typed, word) }
+
+    /// Wörter, die auf `prev` folgten (klein) – als Kopie für Hintergrund-Berechnungen.
+    func bigramNext(_ prev: String) -> [String: Int] {
+        guard let next = bigrams[prev.lowercased()] else { return [:] }
+        var out: [String: Int] = [:]
+        for (w, c) in next { out[w.lowercased(), default: 0] += c }
+        return out
+    }
 
     func bigramCount(_ prev: String, _ word: String) -> Int {
         guard let next = bigrams[prev.lowercased()] else { return 0 }

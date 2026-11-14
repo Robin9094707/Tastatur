@@ -8,8 +8,21 @@ final class SwipeDecoder {
     static let shared = SwipeDecoder()
 
     private var byEnds: [String: [(word: String, rank: Int)]] = [:]
-    private var byLength: [Int: [(word: String, rank: Int)]] = [:]
+    /// Wörter je Länge als flache Tasten-Codes (schnell durchsuchbar, wenig Speicher).
+    private struct LengthBucket {
+        var codes: [UInt8] = []
+        var words: [String] = []
+        var ranks: [Int32] = []
+    }
+    private var buckets: [Int: LengthBucket] = [:]
     private var rankOf: [String: Int] = [:]
+    static let alphabet: [Character] = Array("abcdefghijklmnopqrstuvwxyzäöü")
+    static let codeOf: [Character: UInt8] = {
+        var m: [Character: UInt8] = [:]
+        for (i, c) in alphabet.enumerated() { m[c] = UInt8(i) }
+        m["ß"] = m["s"]
+        return m
+    }()
     private(set) var ready = false
     private var loading = false
 
@@ -18,7 +31,7 @@ final class SwipeDecoder {
         loading = true
         DispatchQueue.global(qos: .utility).async { [weak self] in
             var map: [String: [(word: String, rank: Int)]] = [:]
-            var lengths: [Int: [(word: String, rank: Int)]] = [:]
+            var lengths: [Int: LengthBucket] = [:]
             var ranks: [String: Int] = [:]
             if let url = Bundle.main.url(forResource: "swipe-words", withExtension: "txt"),
                let text = try? String(contentsOf: url, encoding: .utf8) {
@@ -26,13 +39,23 @@ final class SwipeDecoder {
                 text.enumerateLines { line, _ in
                     guard let f = line.first, let l = line.last else { return }
                     map[Self.endsKey(f, l), default: []].append((line, rank))
-                    if line.count >= 2, line.count <= 18 { lengths[line.count, default: []].append((line, rank)) }
+                    let n = line.count
+                    if n >= 2, n <= 18 {
+                        var codes: [UInt8] = []
+                        codes.reserveCapacity(n)
+                        for ch in line { if let c = Self.codeOf[ch] { codes.append(c) } }
+                        if codes.count == n {
+                            lengths[n, default: LengthBucket()].codes.append(contentsOf: codes)
+                            lengths[n, default: LengthBucket()].words.append(line)
+                            lengths[n, default: LengthBucket()].ranks.append(Int32(rank))
+                        }
+                    }
                     if ranks[line] == nil { ranks[line] = rank }
                     rank += 1
                 }
             }
             DispatchQueue.main.async {
-                self?.byLength = lengths
+                self?.buckets = lengths
                 self?.rankOf = ranks
                 self?.byEnds = map
                 self?.ready = true
@@ -51,33 +74,61 @@ final class SwipeDecoder {
     /// Findet das Wort gleicher Länge, das am besten zu den getippten Punkten passt.
     /// Rückgabe: Wort, räumliche Kosten (Summe der quadrierten Abstände in Tastenbreiten) und Gesamtwert.
     func tapCorrect(typed: String, taps: [CGPoint], centers: [Character: CGPoint], kw: CGFloat,
-                    learned: [String: Int], context: (String) -> Double) -> (word: String, spatial: Double, score: Double)? {
+                    learned: [String: Int], context: [String: Int]) -> (word: String, spatial: Double, score: Double)? {
         let n = typed.count
-        guard ready, n >= 2, taps.count == n, kw > 0 else { return nil }
-        var pool = byLength[n] ?? []
-        for (w, c) in learned where w.count == n && rankOf[w] == nil { pool.append((w, max(0, 3000 - c * 200))) }
+        guard ready, n >= 2, taps.count == n, kw > 0, let bucket = buckets[n] else { return nil }
+        // Tastenmitten als Feld je Code
+        var cx = [Double](repeating: .nan, count: Self.alphabet.count)
+        var cy = cx
+        for (ch, p) in centers { if let c = Self.codeOf[ch] { cx[Int(c)] = Double(p.x); cy[Int(c)] = Double(p.y) } }
+        let k = Double(kw), kv = Double(kw) * 1.45
+        let tx = taps.map { Double($0.x) }, ty = taps.map { Double($0.y) }
         let limit = 3.2 + Double(n) * 0.25
-        var best: (String, Double, Double)?
-        for (word, rank) in pool {
-            var cost = 0.0
-            var i = 0
-            var ok = true
-            for ch in word {
-                guard let c = centers[Self.keyChar(ch)] else { ok = false; break }
-                let t = taps[i]
-                // horizontal genauer als vertikal (Reihenhöhe > Tastenbreite)
-                let dx = Double((t.x - c.x) / kw), dy = Double((t.y - c.y) / (kw * 1.45))
-                cost += dx * dx + dy * dy
-                if cost > limit { ok = false; break }
-                i += 1
+        var bestIndex = -1
+        var bestCost = 0.0, bestScore = Double.infinity
+        let count = bucket.ranks.count
+        bucket.codes.withUnsafeBufferPointer { codes in
+            for w in 0..<count {
+                var cost = 0.0
+                var ok = true
+                let base = w * n
+                for i in 0..<n {
+                    let c = Int(codes[base + i])
+                    let x = cx[c]
+                    if x.isNaN { ok = false; break }
+                    let dx = (tx[i] - x) / k, dy = (ty[i] - cy[c]) / kv
+                    cost += dx * dx + dy * dy
+                    if cost > limit { ok = false; break }
+                }
+                guard ok else { continue }
+                let score = cost + log(Double(bucket.ranks[w]) + 2) * 0.22
+                if score < bestScore + 0.9 {
+                    // Feinbewertung nur für aussichtsreiche Kandidaten
+                    let word = bucket.words[w]
+                    let bonus = (learned[word].map { min(0.8, Double($0) * 0.1) } ?? 0)
+                        + Double(min(context[word] ?? 0, 8)) * 0.08
+                    let total = score - bonus
+                    if total < bestScore { bestScore = total; bestCost = cost; bestIndex = w }
+                }
             }
-            guard ok else { continue }
-            let learnedBonus = learned[word].map { min(0.8, Double($0) * 0.1) } ?? 0
-            let score = cost + log(Double(rank) + 2) * 0.22 - learnedBonus - context(word)
-            if best == nil || score < best!.2 { best = (word, cost, score) }
+        }
+        var best: (String, Double, Double)? = bestIndex >= 0 ? (bucket.words[bestIndex], bestCost, bestScore) : nil
+        // Gelernte Wörter (Namen, Slang), die nicht in der Liste stehen
+        for (word, c) in learned where word.count == n && rankOf[word] == nil {
+            var cost = 0.0
+            var ok = true
+            for (i, ch) in word.enumerated() {
+                guard let code = Self.codeOf[ch], !cx[Int(code)].isNaN else { ok = false; break }
+                let dx = (tx[i] - cx[Int(code)]) / k, dy = (ty[i] - cy[Int(code)]) / kv
+                cost += dx * dx + dy * dy
+            }
+            guard ok, cost <= limit else { continue }
+            let total = cost + log(Double(max(0, 3000 - c * 200)) + 2) * 0.22 - min(0.8, Double(c) * 0.1)
+            if best == nil || total < best!.2 { best = (word, cost, total) }
         }
         return best.map { ($0.0, $0.1, $0.2) }
     }
+
     static func endsKey(_ f: Character, _ l: Character) -> String { String(keyChar(f)) + String(keyChar(l)) }
 
     struct Input {

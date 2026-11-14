@@ -23,7 +23,7 @@ enum Panel: Equatable {
 }
 
 struct Suggestion: Identifiable, Equatable {
-    enum Kind { case word, typed, correction, macro, ai, phrase, token, command }
+    enum Kind { case word, typed, correction, macro, ai, phrase, token, command, swipe }
     let id = UUID()
     var text: String
     var kind: Kind
@@ -274,6 +274,7 @@ final class KeyboardState: ObservableObject {
 
     func appear() {
         store.reload()
+        if store.swipeTyping { SwipeDecoder.shared.loadIfNeeded() }
         sourceMode = store.aiScope
         hasFullAccess = controller?.hasFullAccess ?? false
         needsGlobe = controller?.needsInputModeSwitchKey ?? true
@@ -478,6 +479,15 @@ final class KeyboardState: ObservableObject {
 
     func tapKey(_ key: String) {
         let output = (shift != .off && layer == .letters) ? key.uppercased() : key
+        if let sw = lastSwipe {
+            lastSwipe = nil
+            swipeAITask?.cancel()
+            // Nach einem gewischten Wort beginnt ein Buchstabe ein neues Wort (wie bei iOS)
+            if !composeMode, let ch = output.first, ch.isLetter || ch.isNumber, before.hasSuffix(sw.word) {
+                proxy?.insertText(" ")
+                protectedSwipeWord = nil
+            }
+        }
         if composeMode {
             composeText += output
             if shift == .on { shift = .off }
@@ -510,6 +520,7 @@ final class KeyboardState: ObservableObject {
     }
 
     func tapSpace() {
+        lastSwipe = nil
         if composeMode { composeText += " "; return }
         let now = Date()
         let b = before
@@ -527,6 +538,7 @@ final class KeyboardState: ObservableObject {
     }
 
     func tapReturn() {
+        lastSwipe = nil
         if composeMode {
             if composeTarget.isLongText { composeText += "\n"; return }
             sendCompose(); return
@@ -555,6 +567,14 @@ final class KeyboardState: ObservableObject {
             return
         }
 
+        if !word.isEmpty, let protected = protectedSwipeWord, protected == word {
+            protectedSwipeWord = nil
+            engine.learn(word: word, previous: prev)
+            proxy?.insertText(trailing)
+            undoCorrection = nil
+            afterCommit()
+            return
+        }
         if !word.isEmpty {
             if store.macroAutoExpand, let macro = store.macros.first(where: { !$0.shortcut.isEmpty && $0.shortcut.lowercased() == word.lowercased() }) {
                 deleteChars(word.count)
@@ -633,6 +653,17 @@ final class KeyboardState: ObservableObject {
     func tapDelete() {
         if composeMode {
             if !composeText.isEmpty { composeText.removeLast() }
+            return
+        }
+        if let sw = lastSwipe, before.hasSuffix(sw.word) {
+            // Wie bei iOS: ein gewischtes Wort verschwindet mit einem Tipp
+            lastSwipe = nil
+            swipeAITask?.cancel()
+            protectedSwipeWord = nil
+            deleteChars(sw.word.count + (sw.addedSpace && before.dropLast(sw.word.count).hasSuffix(" ") ? 1 : 0))
+            feedback()
+            updateAutoShift()
+            scheduleRefresh()
             return
         }
         if let undo = undoCorrection, before.hasSuffix(undo.corrected + undo.trailing) {
@@ -755,6 +786,13 @@ final class KeyboardState: ObservableObject {
         aiSuggestionTask?.cancel()
         aiThinking = false
         if composeMode || (panel != .none && panel != .tools) { return }
+        if let sw = lastSwipe, currentWord == sw.word {
+            let alts = sw.alternatives.filter { $0 != sw.word }.prefix(3).map { Suggestion(text: $0, kind: .swipe) }
+            let newList = Array(alts)
+            if newList.map(\.text) != suggestions.map(\.text) { suggestions = newList }
+            aiPhrase = nil
+            return
+        }
         if isCommandLine {
             let line = currentLine.trimmingCharacters(in: .whitespaces).lowercased()
             let matches = store.commands.filter { line.count <= 1 || $0.command.lowercased().hasPrefix(line) || $0.title.lowercased().contains(line.dropFirst()) }
@@ -901,6 +939,16 @@ final class KeyboardState: ObservableObject {
     func pickSuggestion(_ s: Suggestion) {
         feedback()
         switch s.kind {
+        case .swipe:
+            guard var sw = lastSwipe, currentWord == sw.word else { break }
+            deleteChars(sw.word.count)
+            proxy?.insertText(s.text)
+            engine.learn(word: s.text, previous: nil, weight: 2)
+            sw.word = s.text
+            lastSwipe = sw
+            protectedSwipeWord = s.text
+            swipeAITask?.cancel()
+            scheduleRefresh()
         case .macro:
             if let macro = store.macros.first(where: { $0.shortcut == s.text }) {
                 deleteChars(currentWord.count)
@@ -2417,6 +2465,117 @@ final class KeyboardState: ObservableObject {
         }
         aiKeepMarkdown = true
         aiAutoCopy = store.discordAutoCopy
+    }
+
+    // MARK: - Gesten-Tippen (Wischen)
+
+    struct SwipeInfo {
+        var word: String
+        var alternatives: [String]
+        var keys: String
+        var addedSpace: Bool
+    }
+    var lastSwipe: SwipeInfo?
+    private var protectedSwipeWord: String?
+    private var swipeAITask: Task<Void, Never>?
+
+    /// Kontextbonus für Kandidaten: Wörter, die du oft nach dem vorherigen Wort schreibst.
+    func swipeContext() -> (String) -> Double {
+        let prev = before.split { !($0.isLetter || $0.isNumber) }.last.map { String($0).lowercased() } ?? ""
+        let engine = self.engine
+        guard !prev.isEmpty else { return { _ in 0 } }
+        return { w in Double(min(engine.bigramCount(prev, w), 8)) * 0.07 }
+    }
+
+    private func swipeCase(_ word: String, caps: ShiftState) -> String {
+        let w = engine.swipeCased(word)
+        switch caps {
+        case .caps: return w.uppercased()
+        case .on: return w.prefix(1).uppercased() + w.dropFirst()
+        case .off: return w
+        }
+    }
+
+    /// Fügt das erkannte Wort ein – mit automatischem Leerzeichen davor.
+    func commitSwipe(_ words: [String], keys: String) {
+        let caps = layer == .letters ? shift : .off
+        if shift == .on { shift = .off }
+        guard let first = words.first else {
+            if store.swipeAI, hasFullAccess, store.hasAPIKey, keys.count >= 2 {
+                swipeAskAI(keys: keys, candidates: [], replacing: nil, caps: caps)
+            } else {
+                feedback()
+                showToast("Wort nicht erkannt – nochmal wischen oder tippen")
+            }
+            return
+        }
+        let word = swipeCase(first, caps: caps)
+        let alternatives = words.map { swipeCase($0, caps: caps) }
+        insertSwipeWord(word, alternatives: alternatives, keys: keys)
+        if store.swipeAI, hasFullAccess, store.hasAPIKey, words.count > 1 {
+            swipeAskAI(keys: keys, candidates: Array(words.prefix(6)), replacing: word, caps: caps)
+        }
+    }
+
+    private func insertSwipeWord(_ word: String, alternatives: [String], keys: String) {
+        feedback()
+        if composeMode {
+            if let last = composeText.last, !last.isWhitespace { composeText += " " }
+            composeText += word
+            return
+        }
+        var addSpace = false
+        if let last = before.last, !last.isWhitespace, !"([{„“\"'/@#-".contains(last) { addSpace = true }
+        proxy?.insertText((addSpace ? " " : "") + word)
+        undoCorrection = nil
+        lastSwipe = SwipeInfo(word: word, alternatives: alternatives, keys: keys, addedSpace: addSpace)
+        protectedSwipeWord = word
+        store.incrementStat("swipes")
+        updateAutoShift()
+        scheduleRefresh()
+    }
+
+    /// KI prüft das gewischte Wort im Satzzusammenhang und korrigiert es bei Bedarf.
+    private func swipeAskAI(keys: String, candidates: [String], replacing old: String?, caps: ShiftState) {
+        swipeAITask?.cancel()
+        let context = String((old.map { String(before.dropLast($0.count)) } ?? before).suffix(400))
+        if old == nil { bar.thinking = true }
+        swipeAITask = Task { [weak self] in
+            guard let self else { return }
+            let answer = try? await self.client.swipeWord(context: context, candidates: candidates, keys: keys)
+            await MainActor.run {
+                self.bar.thinking = false
+                guard !Task.isCancelled, let answer, !answer.isEmpty else {
+                    if old == nil { self.showToast("Wort nicht erkannt – nochmal wischen") }
+                    return
+                }
+                let new = self.swipeCase(answer.lowercased(), caps: caps)
+                guard let old else {
+                    self.insertSwipeWord(new, alternatives: [new], keys: keys)
+                    return
+                }
+                guard new.lowercased() != old.lowercased() else { return }
+                Task { @MainActor in
+                    if var sw = self.lastSwipe, sw.word == old, self.currentWord == old {
+                        self.deleteChars(old.count)
+                        self.proxy?.insertText(new)
+                        sw.word = new
+                        if !sw.alternatives.contains(old) { sw.alternatives.append(old) }
+                        sw.alternatives.removeAll { $0 == new }
+                        sw.alternatives.insert(old, at: 0)
+                        self.lastSwipe = sw
+                        self.protectedSwipeWord = new
+                        self.scheduleRefresh()
+                    } else {
+                        self.liveEditing = true
+                        let ok = await self.replaceWordBeforeCursor(old, with: new)
+                        self.liveEditing = false
+                        guard ok == true else { return }
+                    }
+                    self.showLiveFix(LiveFix(pairs: [.init(wrong: old, right: new)]))
+                }
+            }
+        }
     }
 
     // MARK: - Werkzeuge der Schnellleiste

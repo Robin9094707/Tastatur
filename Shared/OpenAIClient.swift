@@ -336,6 +336,29 @@ final class OpenAIClient {
         }
     }
 
+    // MARK: - Gesten-Tippen
+
+    /// Wählt das gemeinte Wort einer Wischgeste im Satzzusammenhang.
+    func swipeWord(context: String, candidates: [String], keys: String) async throws -> String? {
+        let first = keys.first.map(String.init) ?? ""
+        let last = keys.last.map(String.init) ?? ""
+        let raw = try await chat(messages: [
+            ChatMessage(role: "system", content: """
+            Du bist die Gesten-Erkennung einer deutschen QWERTZ-Smartphone-Tastatur. Der Nutzer hat ein Wort gewischt.
+            Überstrichene Tasten (in Reihenfolge, mit Umwegen): \(keys)
+            \(candidates.isEmpty ? "Es gibt keine lokalen Kandidaten." : "Kandidaten der Tastatur (wahrscheinlichste zuerst): " + candidates.joined(separator: ", "))
+            Wähle das Wort, das im Satzzusammenhang am wahrscheinlichsten gemeint ist. Bevorzuge die Kandidaten; nur wenn keiner passt, nenne ein anderes Wort, das mit „\(first)“ beginnt, mit „\(last)“ endet und dessen Buchstaben in der Tastenfolge vorkommen.
+            Antworte NUR mit dem einen Wort, kleingeschrieben, ohne Satzzeichen.
+            """ + (store.learnedProfile.isEmpty ? "" : "\nProfil des Nutzers: \(store.learnedProfile.prefix(500))")),
+            ChatMessage(role: "user", content: "Text davor: „\(context)“"),
+        ], model: store.fastModel, stream: false, effort: "minimal")
+        let word = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\"„“'.,!?:;"))
+            .split(separator: " ").first.map(String.init) ?? ""
+        guard !word.isEmpty, word.count <= 30, word.allSatisfy({ $0.isLetter || $0 == "-" }) else { return nil }
+        return word
+    }
+
     // MARK: - Kennenlernen
 
     /// Aktualisiert das gelernte Profil aus Textproben des Nutzers.

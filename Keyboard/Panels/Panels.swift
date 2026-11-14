@@ -1186,6 +1186,8 @@ struct KeyboardSettingsPanel: View {
     private var typingToggles: some View {
         grid {
             toggle("Autokorrektur", "textformat.abc.dottedunderline", $store.autocorrect)
+            toggle("Wischen", "scribble.variable", $store.swipeTyping)
+            toggle("KI beim Wischen", "sparkles", $store.swipeAI)
             toggle("Trefferzonen", "hand.point.up.braille", $store.smartTouch)
             toggle("Großschreibung", "textformat.size.larger", $store.autocapitalize)
             toggle("Doppel-Leer = .", "circle.fill", $store.doubleSpacePeriod)

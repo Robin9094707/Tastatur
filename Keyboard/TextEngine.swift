@@ -204,6 +204,43 @@ final class TextEngine {
         return nil
     }
 
+    // MARK: - Gesten-Tippen
+
+    /// Gelernte Wörter (klein) für das Wischen – nur mehrfach benutzte.
+    func swipeLearned() -> [String: Int] {
+        var out: [String: Int] = [:]
+        for (w, c) in learned where c >= 2 && w.count >= 2 {
+            out[w.lowercased(), default: 0] += c
+        }
+        return out
+    }
+
+    func bigramCount(_ prev: String, _ word: String) -> Int {
+        guard let next = bigrams[prev.lowercased()] else { return 0 }
+        var total = 0
+        for (w, c) in next where w.lowercased() == word { total += c }
+        return total
+    }
+
+    /// Richtige Schreibweise für ein gewischtes Wort (Nomen groß, gelernte Namen).
+    func swipeCased(_ word: String) -> String {
+        let cap = word.prefix(1).uppercased() + word.dropFirst()
+        let capCount = learned[cap] ?? 0
+        let lowCount = learned[word] ?? 0
+        if capCount >= 3, capCount > lowCount * 2 { return cap }
+        if CommonWords.german.contains(cap) { return cap }
+        if CommonWords.set.contains(word), CommonWords.german.contains(word) { return word }
+        // Systemwörterbuch: klein falsch, groß richtig → Nomen
+        let ns = word as NSString
+        let lowWrong = checker.rangeOfMisspelledWord(in: word, range: NSRange(location: 0, length: ns.length), startingAt: 0, wrap: false, language: language).location != NSNotFound
+        if lowWrong {
+            let capNS = cap as NSString
+            let capWrong = checker.rangeOfMisspelledWord(in: cap, range: NSRange(location: 0, length: capNS.length), startingAt: 0, wrap: false, language: language).location != NSNotFound
+            if !capWrong { return cap }
+        }
+        return word
+    }
+
     // MARK: - Lernen
 
     func learn(word: String, previous: String?, weight: Int = 1) {

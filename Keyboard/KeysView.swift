@@ -327,8 +327,14 @@ final class KeysView: UIView {
         var cursorMode = false
         var cursorStep = 0
         var handled = false
-        init(key: KeyCapView, startPoint: CGPoint) { self.key = key; self.startPoint = startPoint }
+        // Gesten-Tippen
+        var path: [CGPoint] = []
+        var pathLength: CGFloat = 0
+        var swiping = false
+        init(key: KeyCapView, startPoint: CGPoint) { self.key = key; self.startPoint = startPoint; path = [startPoint] }
     }
+    private let trail = CAShapeLayer()
+    private let trailGlow = CAShapeLayer()
     private var touches: [ObjectIdentifier: TouchInfo] = [:]
     private var touchOrder: [ObjectIdentifier] = []
 
@@ -341,6 +347,15 @@ final class KeysView: UIView {
         clipsToBounds = false
         backgroundColor = .clear
         alternates.isHidden = true
+        for l in [trailGlow, trail] {
+            l.fillColor = UIColor.clear.cgColor
+            l.lineCap = .round
+            l.lineJoin = .round
+            l.zPosition = 50
+            layer.addSublayer(l)
+        }
+        trail.lineWidth = 5
+        trailGlow.lineWidth = 14
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -480,7 +495,7 @@ final class KeysView: UIView {
             let p = t.location(in: self)
             // Schnelles Tippen: vorherige Tasten zuerst auslösen (Rollover), damit die Reihenfolge stimmt
             for id in touchOrder {
-                guard let info = touches[id], !info.handled, !info.alternatesActive, !info.cursorMode else { continue }
+                guard let info = touches[id], !info.handled, !info.alternatesActive, !info.cursorMode, !info.swiping else { continue }
                 switch info.key.kind {
                 case .char, .space, .returnKey: commit(info)
                 default: break
@@ -534,6 +549,7 @@ final class KeysView: UIView {
                 // Nach links wischen auf ⌫ löscht ganze Wörter
                 break
             case .char:
+                if trackSwipe(info, p) { continue }
                 // Finger rutscht auf andere Taste → neue Taste übernehmen
                 if !info.key.cellFrame.insetBy(dx: -4, dy: -6).contains(p), let nk = key(at: p), case .char = nk.kind {
                     info.key.setPressed(false)
@@ -553,7 +569,12 @@ final class KeysView: UIView {
         for t in set {
             let id = ObjectIdentifier(t)
             guard let info = touches[id] else { continue }
-            if !info.handled { commit(info) }
+            if info.swiping {
+                info.handled = true
+                endSwipe(info)
+            } else if !info.handled {
+                commit(info)
+            }
             finish(id)
         }
     }
@@ -585,6 +606,7 @@ final class KeysView: UIView {
         if touches.values.allSatisfy({ !$0.key.isPressed }) { popup.hide() }
         if info.alternatesActive { alternates.isHidden = true }
         if info.cursorMode { state?.cursorMoveEnded() }
+        if info.swiping { fadeTrail() }
     }
 
     private func down(_ info: TouchInfo) {
@@ -628,6 +650,79 @@ final class KeysView: UIView {
         case .emoji: state.toggle(.emoji)
         case .delete: state.stopDelete()
         case .shift: break
+        }
+    }
+
+    // MARK: Gesten-Tippen
+
+    private var letterKeyWidth: CGFloat {
+        keys.first { if case .char(let c) = $0.kind { return c.count == 1 && c.first?.isLetter == true }; return false }?.frame.width ?? 34
+    }
+
+    /// Verfolgt die Fingerbahn. true = Wischgeste aktiv (normale Tastenlogik überspringen).
+    private func trackSwipe(_ info: TouchInfo, _ p: CGPoint) -> Bool {
+        guard config?.layer == .letters, let state, state.store.swipeTyping, !info.alternatesActive else { return false }
+        if let last = info.path.last {
+            let d = hypot(p.x - last.x, p.y - last.y)
+            guard d > 2 else { return info.swiping }
+            info.pathLength += d
+        }
+        info.path.append(p)
+        if !info.swiping {
+            // Nur mit einem Finger und erst ab einer klaren Bewegung über mehrere Tasten
+            guard touches.count == 1, info.pathLength > letterKeyWidth * 1.35 else { return false }
+            info.swiping = true
+            info.longPressTimer?.invalidate()
+            info.key.setPressed(false)
+            popup.hide()
+            SwipeDecoder.shared.loadIfNeeded()
+            let tint = UIColor(Theme.tint(config?.tintIndex ?? 0))
+            trail.strokeColor = tint.withAlphaComponent(0.9).cgColor
+            trailGlow.strokeColor = tint.withAlphaComponent(0.25).cgColor
+            trail.removeAllAnimations()
+            trailGlow.removeAllAnimations()
+            trail.opacity = 1
+            trailGlow.opacity = 1
+            state.feedback()
+        }
+        let path = UIBezierPath()
+        // Nur die letzten Punkte zeichnen: wirkt wie ein leuchtender Schweif
+        let tail = info.path.suffix(42)
+        if let first = tail.first {
+            path.move(to: first)
+            for q in tail.dropFirst() { path.addLine(to: q) }
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        trail.path = path.cgPath
+        trailGlow.path = path.cgPath
+        CATransaction.commit()
+        return true
+    }
+
+    private func endSwipe(_ info: TouchInfo) {
+        guard let state else { return }
+        var centers: [Character: CGPoint] = [:]
+        for k in keys {
+            if case .char(let c) = k.kind, c.count == 1, let ch = c.lowercased().first, ch.isLetter {
+                centers[ch] = CGPoint(x: k.frame.midX, y: k.frame.midY)
+            }
+        }
+        let input = SwipeDecoder.Input(points: info.path, centers: centers, keyWidth: letterKeyWidth,
+                                       learned: state.engine.swipeLearned(), context: state.swipeContext())
+        let result = SwipeDecoder.shared.decode(input)
+        state.commitSwipe(result.words, keys: result.keys)
+    }
+
+    private func fadeTrail() {
+        for l in [trail, trailGlow] {
+            let a = CABasicAnimation(keyPath: "opacity")
+            a.fromValue = 1
+            a.toValue = 0
+            a.duration = 0.28
+            a.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            l.opacity = 0
+            l.add(a, forKey: "fade")
         }
     }
 

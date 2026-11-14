@@ -125,6 +125,9 @@ final class SharedStore: ObservableObject {
 
     // Tippkontrolle
     @Published var smartTouch: Bool = true { didSet { set(smartTouch, "smartTouch") } }
+    /// Gesten-Tippen (Wischen) und KI-Hilfe dabei.
+    @Published var swipeTyping: Bool = true { didSet { set(swipeTyping, "swipeTyping") } }
+    @Published var swipeAI: Bool = true { didSet { set(swipeAI, "swipeAI") } }
     @Published var liveAICorrection: Bool = true { didSet { set(liveAICorrection, "liveAICorrection") } }
 
     // Emojis
@@ -199,6 +202,8 @@ final class SharedStore: ObservableObject {
         upd(\.keyFontDesign, d.string(forKey: "keyFontDesign") ?? "default")
         upd(\.themeID, d.string(forKey: "themeID") ?? "")
         upd(\.smartTouch, bool("smartTouch", true))
+        upd(\.swipeTyping, bool("swipeTyping", true))
+        upd(\.swipeAI, bool("swipeAI", true))
         upd(\.aiSuggestMode, d.string(forKey: "aiSuggestMode") ?? "manual")
         upd(\.translateTarget, d.string(forKey: "translateTarget") ?? "Englisch")
         upd(\.translateDirect, d.object(forKey: "translateDirect") as? Bool ?? true)

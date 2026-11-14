@@ -129,7 +129,8 @@ struct MissingSetupBanner: View {
             } else if !state.store.hasAPIKey {
                 Label("Kein KI-Zugang. Melde dich mit deinem ChatGPT-Abo an oder füge einen API-Schlüssel ein:", systemImage: "key.fill")
                 HStack {
-                    Button("Mit ChatGPT anmelden") { state.openApp("chatgpt-login") }
+                    Button("ChatGPT") { state.openApp("chatgpt-login") }
+                    Button("Code") { state.pasteChatGPTCode() }
                     Button("Einfügen") { state.pasteAPIKey() }
                     Button("Eintippen") { state.beginInput(.apiKey) }
                 }
@@ -678,7 +679,8 @@ struct KeyboardSettingsPanel: View {
                         }
                     }
                 }
-                Text("Anmeldung öffnet kurz die App – dort meldest du dich auf der OpenAI-Seite an (E-Mail, Passwort, 2FA).")
+                actionButton("Kopplungscode einfügen", "link") { state.pasteChatGPTCode() }
+                Text("In der App anmelden → „Code kopieren“ → hier einfügen (passiert auch automatisch beim Öffnen der Tastatur).")
                     .font(.caption2).foregroundStyle(.secondary)
             }
             if store.aiProvider != "chatgpt" {

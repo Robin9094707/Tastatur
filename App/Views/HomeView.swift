@@ -152,6 +152,12 @@ struct HomeView: View {
                         }
                     }
                 }
+                if login.canCopyCode {
+                    GlassButton(title: "Code für Tastatur kopieren", symbol: "link", prominent: true) { login.copyTransferCode() }
+                } else {
+                    Text("Code wurde an die Tastatur übergeben. Für einen neuen Code: „Neu anmelden“.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 HStack {
                     GlassButton(title: "Neu anmelden", symbol: "arrow.clockwise") { login.start() }
                     GlassButton(title: "Abmelden", symbol: "rectangle.portrait.and.arrow.right") { login.signOut() }

@@ -1322,6 +1322,11 @@ final class KeyboardState: ObservableObject {
         if pb.changeCount != lastChangeCount {
             lastChangeCount = pb.changeCount
             if pb.hasStrings, let s = pb.string {
+                // Kopplungscode aus der App: automatisch übernehmen, nie im Verlauf speichern
+                if ChatGPTAuth.isTransferCode(s) {
+                    importChatGPTCode(s)
+                    return
+                }
                 clips = store.addClip(s)
                 return
             }
@@ -1976,7 +1981,31 @@ final class KeyboardState: ObservableObject {
         showToast(store.activeProfile.map { "Profil: \($0.emoji) \($0.name)" } ?? "Kein Profil")
     }
 
+    /// Übernimmt die ChatGPT-Anmeldung aus dem Kopplungscode der App.
+    func importChatGPTCode(_ code: String) {
+        if ChatGPTAuth.importTransferCode(code, into: store) {
+            if UIPasteboard.general.string == code { UIPasteboard.general.string = "" }
+            lastChangeCount = UIPasteboard.general.changeCount
+            feedback(.medium)
+            showToast("Mit ChatGPT gekoppelt ✓ – \(store.chatgptAccount)")
+        } else {
+            showToast("Kopplungscode ungültig – in der App neu kopieren.")
+        }
+    }
+
+    func pasteChatGPTCode() {
+        guard hasFullAccess, let s = UIPasteboard.general.string, ChatGPTAuth.isTransferCode(s) else {
+            showToast("Kopiere zuerst den Kopplungscode in der App (ChatGPT-Abo → „Code kopieren“).")
+            return
+        }
+        importChatGPTCode(s)
+    }
+
     func pasteAPIKey() {
+        if hasFullAccess, let s = UIPasteboard.general.string, ChatGPTAuth.isTransferCode(s) {
+            importChatGPTCode(s)
+            return
+        }
         guard hasFullAccess, let s = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines), s.hasPrefix("sk-") else {
             showToast("Kopiere zuerst einen Schlüssel (sk-…).")
             return

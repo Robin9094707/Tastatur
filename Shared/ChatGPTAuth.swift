@@ -190,6 +190,42 @@ enum ChatGPTAuth {
         return json
     }
 
+    // MARK: - Kopplungscode (App → Tastatur, falls keine App Group geteilt wird)
+
+    static let transferPrefix = "tastaturki-chatgpt1:"
+
+    private struct Transfer: Codable {
+        var session: ChatGPTSession
+        var models: [[String]]
+        var model: String
+    }
+
+    static func isTransferCode(_ s: String) -> Bool {
+        s.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(transferPrefix)
+    }
+
+    /// Erzeugt den Code, mit dem die Tastatur die Anmeldung übernimmt.
+    static func transferCode(_ session: ChatGPTSession, models: [[String]], model: String) -> String? {
+        guard let data = try? JSONEncoder().encode(Transfer(session: session, models: models, model: model)) else { return nil }
+        return transferPrefix + data.base64EncodedString()
+    }
+
+    /// Übernimmt die Anmeldung aus einem Kopplungscode und speichert sie für diesen Prozess.
+    @discardableResult
+    static func importTransferCode(_ code: String, into store: SharedStore) -> Bool {
+        let t = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.hasPrefix(transferPrefix),
+              let data = Data(base64Encoded: String(t.dropFirst(transferPrefix.count))),
+              let tr = try? JSONDecoder().decode(Transfer.self, from: data),
+              !tr.session.refreshToken.isEmpty else { return false }
+        save(tr.session)
+        store.chatgptAccount = tr.session.email.isEmpty ? "ChatGPT-Konto" : tr.session.email
+        if !tr.models.isEmpty { store.chatgptModels = tr.models }
+        store.chatgptModel = tr.model.isEmpty ? (tr.models.first?.first ?? defaultModel) : tr.model
+        store.aiProvider = "chatgpt"
+        return true
+    }
+
     // MARK: - Abmelden
 
     static func signOut() async {

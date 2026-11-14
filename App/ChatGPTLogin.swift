@@ -195,7 +195,11 @@ final class ChatGPTLogin: NSObject, ObservableObject, ASWebAuthenticationPresent
                 }
                 self.busy = false
                 self.ok = true
-                self.status = "Verbunden ✓ – Die Tastatur nutzt jetzt dein ChatGPT-Abo. Du kannst zurück zu deiner App wechseln."
+                if self.copyTransferCode() {
+                    self.status = "Verbunden ✓ – Kopplungscode kopiert. Öffne jetzt die Tastatur: Sie übernimmt den Code automatisch (oder ⚙︎ → KI & API → „Kopplungscode einfügen“)."
+                } else {
+                    self.status = "Verbunden ✓ – Die Tastatur nutzt jetzt dein ChatGPT-Abo."
+                }
             } catch {
                 self.session?.cancel()
                 self.fail(error.localizedDescription)
@@ -220,6 +224,34 @@ final class ChatGPTLogin: NSObject, ObservableObject, ASWebAuthenticationPresent
     private func stopListener() {
         listener?.cancel()
         listener = nil
+    }
+
+    // MARK: - Kopplung mit der Tastatur
+
+    /// Ob ein Code kopiert werden kann (Anmeldung liegt in der App vor).
+    var canCopyCode: Bool { ChatGPTAuth.load() != nil }
+
+    /// Kopiert den Kopplungscode (läuft nach 10 Minuten aus, nur auf diesem Gerät).
+    /// Ohne geteilte App Group übergibt die App die Anmeldung an die Tastatur und vergisst sie selbst –
+    /// sonst würden beide denselben Erneuerungs-Token verbrauchen und sich gegenseitig abmelden.
+    @discardableResult
+    func copyTransferCode() -> Bool {
+        let store = SharedStore.shared
+        guard let session = ChatGPTAuth.load(),
+              let code = ChatGPTAuth.transferCode(session, models: store.chatgptModels, model: store.chatgptModel) else {
+            status = "Kein Code vorhanden – bitte neu anmelden."
+            ok = false
+            return false
+        }
+        UIPasteboard.general.setItems([["public.utf8-plain-text": code]], options: [
+            .localOnly: true,
+            .expirationDate: Date().addingTimeInterval(600),
+        ])
+        if !store.usesAppGroup { ChatGPTAuth.clear() }
+        objectWillChange.send()
+        status = "Kopplungscode kopiert ✓ – jetzt die Tastatur öffnen, sie übernimmt ihn automatisch."
+        ok = true
+        return true
     }
 
     // MARK: - Abmelden

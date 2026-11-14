@@ -96,6 +96,8 @@ final class ExtrasState: NSObject, ObservableObject, CLLocationManagerDelegate {
     var lastSnapshot = ""
     var lastEventKey = ""
     var replySource = ""
+    /// Wörter seit dem letzten Angebot (Angebote verschwinden nach ein paar Wörtern).
+    var offerAge = 0
 
     // Kontakte
     var contacts: [ContactEntry] = []
@@ -175,6 +177,13 @@ extension KeyboardState {
             case .event, .replies: break
             }
         }
+    }
+
+    /// Nach jedem Wort: Termin-/Antwort-Angebote nach ein paar Wörtern ausblenden.
+    func ageOffer() {
+        guard bar.offer != nil else { return }
+        extras.offerAge += 1
+        if extras.offerAge > 6 { bar.offer = nil }
     }
 
     func restoreDeleted() {
@@ -425,10 +434,12 @@ extension KeyboardState {
     /// Sucht in einem Satz nach einem Termin (lokal, ohne KI) und bietet „Im Kalender speichern“ an.
     func detectEvent(in text: String, force: Bool = false) {
         guard store.calendarSuggest || force, text.count >= 6, text.count < 1500 else { return }
-        guard let draft = EventParser.parse(text) else { return }
+        // Automatisch nur bei klarer Uhrzeit oder Datum – „morgen“ allein reicht nicht
+        guard let draft = EventParser.parse(text, strict: !force) else { return }
         let key = "\(draft.start.timeIntervalSince1970)|\(draft.title)"
         guard key != extras.lastEventKey else { return }
         extras.lastEventKey = key
+        extras.offerAge = 0
         bar.offer = BarOffer(kind: .event(draft), icon: "calendar.badge.plus", title: "Termin speichern · \(EventParser.label(draft))")
     }
 
@@ -487,6 +498,7 @@ extension KeyboardState {
         store.defaults.set(count, forKey: "reply.lastCount")
         extras.replySource = text
         if case .event = bar.offer?.kind { return }
+        extras.offerAge = 0
         bar.offer = BarOffer(kind: .replies, icon: "bubble.left.and.text.bubble.right.fill", title: "Antworten auf kopierte Nachricht")
     }
 
@@ -568,7 +580,7 @@ enum EventParser {
         "november": 11, "nov": 11, "dezember": 12, "dez": 12,
     ]
 
-    static func parse(_ raw: String, now: Date = Date()) -> EventDraft? {
+    static func parse(_ raw: String, strict: Bool = false, now: Date = Date()) -> EventDraft? {
         let text = raw.lowercased()
         let cal = Calendar(identifier: .gregorian)
         var day: Date?
@@ -624,6 +636,8 @@ enum EventParser {
         if let h = hour, h < 8, m("\\b(abends?|nachmittags?|heute abend|morgen abend)\\b") != nil { hour = h + 12 }
 
         guard day != nil || hour != nil else { return nil }
+        // Streng (automatisch): Uhrzeit oder ausdrückliches Datum nötig
+        if strict, hour == nil, m("\\b\\d{1,2}\\.(\\d{1,2}\\.|\\s?[a-zä]{3,})") == nil { return nil }
         // Nur eine Uhrzeit ohne Tag: heute (oder morgen, falls schon vorbei) – aber nur mit klarem „um … Uhr“
         if day == nil {
             guard m("\\b(um|ab|gegen) \\d{1,2}([:.]\\d{2})? ?uhr\\b") != nil else { return nil }

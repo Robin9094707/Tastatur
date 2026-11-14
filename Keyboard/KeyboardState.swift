@@ -550,6 +550,7 @@ final class KeyboardState: ObservableObject {
 
     func tapSpace() {
         finishDeletionBurst()
+        ageOffer()
         lastSwipe = nil
         if composeMode { composeText += " "; return }
         let now = Date()

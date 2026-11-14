@@ -14,13 +14,14 @@ Der Nutzer spricht Deutsch und möchte nach jeder Änderung eine **fertige IPA**
 ## Struktur
 - `project.yml` – Targets `Tastatur` (App, `de.tastatur.app`) und `TastaturKeyboard` (Extension, `de.tastatur.app.keyboard`), App Group `group.de.tastatur.app`.
 - `Shared/` (in beiden Targets):
-  - `SharedStore.swift` – alle Einstellungen (App Group, Fallback auf `UserDefaults.standard`). `reload()` setzt Werte nur bei Änderung (`upd`). **Migrationen** über `settingsVersion` in `migrateIfNeeded()` (aktuell 10) – bei neuen Standard-Aktionen/Werkzeugen Version erhöhen.
+  - `SharedStore.swift` – alle Einstellungen (App Group, Fallback auf `UserDefaults.standard`). `reload()` setzt Werte nur bei Änderung (`upd`). **Migrationen** über `settingsVersion` in `migrateIfNeeded()` (aktuell 11) – bei neuen Standard-Aktionen/Werkzeugen Version erhöhen.
   - `OpenAIClient.swift` – Chat Completions mit Streaming, Modell-Fallback (`SharedStore.fallbackModels`, Standard **gpt-6-luna**), automatisches Weglassen nicht unterstützter Parameter (`reasoning_effort`, `stream`), Chunking sehr langer Texte, `predict` (KI-Vorschläge), `finalCheck` (Schlusskorrektur des ganzen Textes), `contextCheck`, `swipeWord`, `discordAnnouncement`, `learnProfile`, `translate`, `minecraftCommand`.
   - `Models.swift` – Makros, Ablage, Profile, KI-Aktionen (Kategorien inkl. Formatieren), `TextDiff`, `SavedCommand` (Minecraft-Befehle).
   - `Glass.swift` – `glass()`/`glassCapsule()`-Helfer. **In der Tastatur ist `GlassConfig.lightweight = true`** (Speicher!): echtes Liquid Glass nur mit `force: true` (Toolbar). Hintergründe, Verläufe, `KeyboardBackgroundView`, Bild-Downsampling.
   - `KeyStyle.swift` – 7 Tastenstile, `KeyStyleKit.colors`, 21 `ThemePreset`s + `random()`, `ThemeThumbnail`.
   - `ChatGPTAuth.swift` – „Sign in with ChatGPT“ (Tokens, Erneuerung, Kopplungscode App→Tastatur ohne App Group); Anfragen über `/v1/responses` in `OpenAIClient`.
   - `AppProfiles.swift` – Ziel-Apps (Discord, WhatsApp …) mit Formatierungsregeln; Host-Erkennung ab iOS 26.4 gesperrt → manuelle Auswahl.
+  - `PersonalData.swift` – `ContactEntry`/`ContactsCache` (contacts.json) und `SavedLocation` (last-location.json): von der App geschrieben, von der Tastatur gelesen.
   - `Tools.swift` – Werkzeuge der Schnellleiste (`ToolItem`, auch `tr:<Sprache>` = Ein-Klick-Übersetzen), Sprachen, `StickerStore`, sicherer `Calculator` (kein NSExpression – stürzt bei Fehleingaben ab).
 - `Keyboard/`:
   - `KeyboardViewController.swift` – Höhe, Rotation/Querformat (`updateLayoutMetrics`), Hell/Dunkel des Textfelds, `delaysTouchesBegan=false` (Rand-Verzögerung), `openURL`.
@@ -32,15 +33,19 @@ Der Nutzer spricht Deutsch und möchte nach jeder Änderung eine **fertige IPA**
   - `KeyboardView.swift` – SwiftUI-Root, Toolbar (Vorschläge, ✨-Knopf „KI denk mit“, Eingabe-/Übersetzungsleiste), Schnellleiste.
   - `Panels/Panels.swift` – alle Panels: KI, Ergebnis, Ablage, Makros, Emoji, Einstellungen (mehrseitig), Sticker, Cursor, Übersetzen, Befehle.
   - `TextEngine.swift` – lokale Vorschläge, tastaturgewichtete Autokorrektur (QWERTZ-Nachbarn), Lernen (Wörter, Bi-/Trigramme, persönliche Einträge wie E-Mails), Speichern im Hintergrund.
-  - `SwipeDecoder.swift` + `Resources/swipe-words.txt` – Gesten-Tippen (Bahnform + Häufigkeit + Kontext), KI-Nachkorrektur in `KeyboardState.commitSwipe`.
+  - `SwipeDecoder.swift` + `Resources/swipe-words.txt` – Gesten-Tippen (Bahnform + Häufigkeit + Kontext), KI-Nachkorrektur in `KeyboardState.commitSwipe`. Außerdem alphabetisch sortierte Wortliste für Präfix-Prüfung/Vervollständigung per Binärsuche (`hasWord(withPrefix:)`, `completions`).
+  - `Extras.swift` – Verlauf & Rückgängig (`HistoryStore`, writing-history.json, max. 7 Tage; Lösch-Vorgänge → „Wiederherstellen“-Angebot; KI-Ersetzung rückgängig), Angebote in der Leiste (`BarOffer` in `BarModel.offer`), Kontakt-Vorschläge, Standort einfügen, Termin-Erkennung (`EventParser`, Deutsch, lokal) + Speichern (EventKit oder `tastatur://event?...` in der App), Antwortvorschläge auf kopierte Nachrichten, „Merken“ (KI-Gedächtnis), `HistoryPanel`. Zusatz-Zustand in `ExtrasState` (`state.extras`).
   - `CommonWords.swift`, `EmojiCatalog.swift` (generiert aus Unicode emoji-test.txt, ≤ E16.0), `KeyLayouts.swift`.
-- `App/` – bewusst **schlank**: eine Seite (`HomeView`) mit Status, ChatGPT-Anmeldung (`ChatGPTLogin.swift`, Loopback 127.0.0.1:1455), API-Schlüssel, Stickern (Freistellen per Vision in `StickerMaker.swift`), Hintergrundbild, Wörterbuch (`DictionaryView`). Alles andere wird in der Tastatur eingestellt.
+- **Tipp-Pfad (Power-User):** In `touchesBegan`/Trefferzonen nie `UITextChecker` – nur `isPlausiblePrefixFast` (Speicher/Binärsuche); Unbekanntes wird in Tipp-Pausen nachgeschlagen. Vorschläge laufen mit adaptivem Abstand (`refreshDelay` nach Tipp-Rhythmus), Tipp-/Autokorrektur wird in der Pause vorberechnet (`tapFix`, `correctionCache`).
+- `App/` – bewusst **schlank**: eine Seite (`HomeView`) mit Status, ChatGPT-Anmeldung (`ChatGPTLogin.swift`, Loopback 127.0.0.1:1455), API-Schlüssel, Stickern (Freistellen per Vision in `StickerMaker.swift`), Hintergrundbild, Wörterbuch (`DictionaryView`). Dazu `PrivacyView.swift`: Kontakte/Standort/Kalender freigeben (`PersonalDataManager`, auch `tastatur://event` speichern), Sicherung exportieren/importieren (`BackupManager`, .tastatur-Datei, tägliche Auto-Sicherung in Documents/Sicherungen). Echte iCloud-Sync geht ohne bezahlten Entwickler-Account nicht. Alles andere wird in der Tastatur eingestellt.
 
 ## Wichtige Grenzen von iOS-Tastaturen
 - Kein Mikrofon (Diktat wurde deshalb entfernt), kein Fotozugriff (Bilder/Sticker über die Zwischenablage), keine Bilder direkt einfügen (Sticker werden kopiert).
 - Die Tastatur kann nicht über ihre Höhe hinauswachsen (große Ablage-Ansicht wurde deshalb entfernt).
 - Strenges Speicherlimit (~50–70 MB): keine schweren Effekte/Bilder voll dekodieren, alles Schwere verzögert/im Hintergrund.
 - Passwort-/Einmalcode-Felder nutzen immer die System-Tastatur.
+- Die Tastatur sieht nur das aktuelle Textfeld – keinen Bildschirm, keine anderen Apps/Nachrichten (auch nicht bei Sideload). Antwortvorschläge daher über die Zwischenablage.
+- Kontakte/Standort/Kalender-Rechte fragt die App ab; die Tastatur nutzt Caches im App-Group-Container (Standort/Kalender versucht sie auch direkt).
 - Netzwerk/Zwischenablage nur mit „Vollem Zugriff“.
 
 ## Konventionen

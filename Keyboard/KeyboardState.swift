@@ -1363,7 +1363,8 @@ final class KeyboardState: ObservableObject {
             guard !text.isEmpty, let i = store.actions.firstIndex(where: { $0.id == id }) else { return }
             store.actions[i].prompt = text
             showToast("Aktion „\(store.actions[i].title)“ geändert ✓")
-        case .ai, .refine, .translate, .calc, .mcCommand, .discordAnnounce:
+        case .ai, .refine, .translate, .calc, .mcCommand, .discordAnnounce,
+             .clipEdit, .clipNew, .clipRename, .clipFolderNew, .clipFolderRename, .clipSearch:
             break
         }
     }

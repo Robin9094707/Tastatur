@@ -1191,8 +1191,12 @@ final class KeyboardState: ObservableObject {
         case .chatModel:
             guard !text.isEmpty else { return }
             let m = text.lowercased().replacingOccurrences(of: " ", with: "")
-            store.chatModel = m
-            store.fastModel = m
+            if store.usesChatGPT {
+                store.chatgptModel = m
+            } else {
+                store.chatModel = m
+                store.fastModel = m
+            }
             showToast("Modell: \(m)")
         case .personalContext:
             store.personalContext = text
@@ -1981,6 +1985,28 @@ final class KeyboardState: ObservableObject {
         showToast(store.activeProfile.map { "Profil: \($0.emoji) \($0.name)" } ?? "Kein Profil")
     }
 
+    @Published var loadingModels = false
+
+    /// Lädt die Modelle, die das ChatGPT-Abo freigibt.
+    func refreshChatGPTModels(silent: Bool = false) {
+        guard hasFullAccess, store.usesChatGPT, !loadingModels else { return }
+        loadingModels = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let models = try await ChatGPTAuth.fetchModels()
+                self.loadingModels = false
+                guard !models.isEmpty else { if !silent { self.showToast("Keine Modelle gefunden.") }; return }
+                self.store.chatgptModels = models
+                if !models.contains(where: { $0.first == self.store.chatgptModel }) { self.store.chatgptModel = models[0][0] }
+                if !silent { self.showToast("\(models.count) Modelle geladen ✓") }
+            } catch {
+                self.loadingModels = false
+                if !silent { self.showToast(error.localizedDescription) }
+            }
+        }
+    }
+
     /// Übernimmt die ChatGPT-Anmeldung aus dem Kopplungscode der App.
     func importChatGPTCode(_ code: String) {
         if ChatGPTAuth.importTransferCode(code, into: store) {
@@ -1988,6 +2014,7 @@ final class KeyboardState: ObservableObject {
             lastChangeCount = UIPasteboard.general.changeCount
             feedback(.medium)
             showToast("Mit ChatGPT gekoppelt ✓ – \(store.chatgptAccount)")
+            refreshChatGPTModels(silent: true)
         } else {
             showToast("Kopplungscode ungültig – in der App neu kopieren.")
         }

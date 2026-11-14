@@ -669,15 +669,39 @@ struct KeyboardSettingsPanel: View {
                 } else {
                     row("ChatGPT", store.chatgptAccount, "person.crop.circle.badge.checkmark") { state.openApp("chatgpt-login") }
                 }
-                if store.aiProvider == "chatgpt", !store.chatgptModels.isEmpty {
-                    Text("Modell (Abo)").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            ForEach(store.chatgptModels, id: \.self) { m in
-                                chip(m.count > 1 ? m[1] : m[0], selected: store.chatgptModel == m[0]) { store.chatgptModel = m[0] }
+                if store.usesChatGPT {
+                    HStack {
+                        Text("Modell (Abo)").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        Spacer()
+                        Text(store.chatgptModel.isEmpty ? ChatGPTAuth.defaultModel : store.chatgptModel)
+                            .font(.caption2.monospaced()).foregroundStyle(.secondary)
+                    }
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 6)], spacing: 6) {
+                        ForEach(store.chatgptModels, id: \.self) { m in
+                            Button { store.chatgptModel = m[0]; state.feedback() } label: {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(m.count > 1 ? m[1] : m[0]).font(.caption.weight(.semibold)).lineLimit(1)
+                                    if m.count > 1, m[1] != m[0] {
+                                        Text(m[0]).font(.system(size: 9).monospaced()).foregroundStyle(.secondary).lineLimit(1)
+                                    }
+                                }
+                                .padding(.horizontal, 10)
+                                .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+                                .foregroundStyle(store.chatgptModel == m[0] ? Color.white : Color.primary)
+                                .glass(cornerRadius: 10, tint: store.chatgptModel == m[0] ? state.tint : nil, interactive: true)
                             }
+                            .buttonStyle(.plain)
                         }
                     }
+                    HStack(spacing: 6) {
+                        chip(state.loadingModels ? "Lade …" : (store.chatgptModels.isEmpty ? "Modelle laden" : "Aktualisieren"), selected: false) {
+                            state.refreshChatGPTModels()
+                        }
+                        chip("Eigenes …", selected: !store.chatgptModels.contains { $0.first == store.chatgptModel }) {
+                            state.beginInput(.chatModel, prefill: store.chatgptModel)
+                        }
+                    }
+                    .onAppear { if store.chatgptModels.isEmpty { state.refreshChatGPTModels(silent: true) } }
                 }
                 actionButton("Kopplungscode einfügen", "link") { state.pasteChatGPTCode() }
                 Text("In der App anmelden → „Code kopieren“ → hier einfügen (passiert auch automatisch beim Öffnen der Tastatur).")
@@ -707,6 +731,12 @@ struct KeyboardSettingsPanel: View {
                     }
                 }
             }
+            }
+            Text("Denkaufwand").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                chip("Schnell", selected: store.reasoningEffort == "low" || store.reasoningEffort == "minimal") { store.reasoningEffort = "low" }
+                chip("Mittel", selected: store.reasoningEffort == "medium") { store.reasoningEffort = "medium" }
+                chip("Gründlich", selected: store.reasoningEffort == "high") { store.reasoningEffort = "high" }
             }
             grid {
                 toggle("Live-Korrektur", "checkmark.seal", $store.liveAICorrection)

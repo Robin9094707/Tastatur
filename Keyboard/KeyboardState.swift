@@ -247,15 +247,10 @@ final class KeyboardState: ObservableObject {
     var toolbarHeight: CGFloat {
         let compact = isLandscape && !isPad
         if composeMode && composeTarget == .translate { return compact ? 82 : 96 }
-        if composeMode && composeTarget.isLongText { return compact ? 96 : 150 }
+        if composeMode && composeTarget.isLongText { return compact ? 88 : 120 }
         return compact ? 42 : 48
     }
-    /// Zusätzliche Höhe für die große Ablage-Ansicht (nur Hochformat).
-    var panelExtraHeight: CGFloat {
-        guard panel == .clipboard, store.clipboardExpanded, !isLandscape else { return 0 }
-        return isPad ? 220 : 190
-    }
-    var contentHeight: CGFloat { keysHeight + panelExtraHeight }
+    var contentHeight: CGFloat { keysHeight }
     var keyRowHeight: CGFloat {
         if isPad { return isLandscape ? 60 : 64 }
         return isLandscape ? 39 : 55
@@ -264,7 +259,7 @@ final class KeyboardState: ObservableObject {
     @Published var sideInset: CGFloat = 0
     var rowCount: Int { store.showNumberRow && layer == .letters ? 5 : 4 }
     var keysHeight: CGFloat { CGFloat(rowCount) * keyRowHeight + 8 }
-    var totalHeight: CGFloat { toolbarHeight + keysHeight + panelExtraHeight }
+    var totalHeight: CGFloat { toolbarHeight + keysHeight }
 
     enum ReplaceTarget { case none, selection, all(length: Int), range(before: Int, after: Int) }
 
@@ -1554,12 +1549,6 @@ final class KeyboardState: ObservableObject {
         }
         feedback()
         showToast(folder.map { "In „\($0)“ verschoben ✓" } ?? "Aus dem Ordner genommen")
-    }
-
-    func toggleClipExpanded() {
-        store.clipboardExpanded.toggle()
-        feedback()
-        onHeightChange?(totalHeight)
     }
 
     func setClipFilter(_ f: String) {

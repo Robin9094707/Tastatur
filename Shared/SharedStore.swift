@@ -84,8 +84,6 @@ final class SharedStore: ObservableObject {
     @Published var clipboardEnabled: Bool = true { didSet { set(clipboardEnabled, "clipboardEnabled") } }
     @Published var clipboardLimit: Int = 50 { didSet { set(clipboardLimit, "clipboardLimit") } }
     @Published var clipFolders: [String] = [] { didSet { setCodable(clipFolders, "clipFolders") } }
-    /// Ablage in großer Ansicht (höhere Tastatur).
-    @Published var clipboardExpanded: Bool = true { didSet { set(clipboardExpanded, "clipboardExpanded") } }
 
     @Published var haptics: Bool = true { didSet { set(haptics, "haptics") } }
     /// Haptik-Stärke 0…1 und Art („light“ = wie iOS, „soft“, „medium“, „rigid“, „heavy“).
@@ -165,7 +163,6 @@ final class SharedStore: ObservableObject {
         upd(\.clipboardEnabled, bool("clipboardEnabled", true))
         upd(\.clipboardLimit, d.object(forKey: "clipboardLimit") as? Int ?? 50)
         upd(\.clipFolders, getCodable("clipFolders") ?? [])
-        upd(\.clipboardExpanded, bool("clipboardExpanded", true))
         upd(\.haptics, bool("haptics", true))
         upd(\.hapticStrength, d.object(forKey: "hapticStrength") as? Double ?? 0.6)
         upd(\.hapticStyle, d.string(forKey: "hapticStyle") ?? "light")

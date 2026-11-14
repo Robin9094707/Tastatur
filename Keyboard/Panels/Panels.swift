@@ -384,7 +384,7 @@ struct ClipboardPanel: View {
                     Spacer()
                 }
             } else {
-                VStack(spacing: 6) {
+                VStack(spacing: 5) {
                     folderBar
                     actionBar
                     if let folder = confirmFolder { folderConfirm(folder) }
@@ -468,12 +468,6 @@ struct ClipboardPanel: View {
             Spacer(minLength: 0)
             Button { confirmClear = true; state.feedback() } label: {
                 Image(systemName: "trash.slash").font(.system(size: 13, weight: .semibold))
-                    .frame(width: 32, height: 32).glass(cornerRadius: 16, interactive: true)
-            }
-            .buttonStyle(.plain)
-            Button { state.toggleClipExpanded() } label: {
-                Image(systemName: store.clipboardExpanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-                    .font(.system(size: 13, weight: .semibold))
                     .frame(width: 32, height: 32).glass(cornerRadius: 16, interactive: true)
             }
             .buttonStyle(.plain)
@@ -578,7 +572,7 @@ struct ClipboardPanel: View {
                     }
                     Text(String(item.text.prefix(400)))
                         .font(.system(size: 14))
-                        .lineLimit(store.clipboardExpanded ? 4 : 2)
+                        .lineLimit(2)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     HStack(spacing: 4) {
                         if let f = item.folder { Label(f, systemImage: "folder.fill").labelStyle(.titleAndIcon) }

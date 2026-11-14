@@ -6,6 +6,7 @@ import PhotosUI
 /// Alles andere wird direkt in der Tastatur eingestellt.
 struct HomeView: View {
     @EnvironmentObject var store: SharedStore
+    @EnvironmentObject var login: ChatGPTLogin
     @Environment(\.scenePhase) private var scenePhase
     @State private var showSetup = false
     @State private var keyDraft = ""
@@ -22,6 +23,7 @@ struct HomeView: View {
             VStack(spacing: 16) {
                 hero
                 statusCard
+                chatgptCard
                 apiCard
                 NavigationLink { StickerManagerView() } label: {
                     GlassCard {
@@ -102,7 +104,7 @@ struct HomeView: View {
             CardHeader(title: "Status", symbol: "checkmark.shield")
             statusRow("Tastatur hinzugefügt", ok: enabled, hint: "Einstellungen → Allgemein → Tastatur → Tastaturen")
             statusRow("Voller Zugriff", ok: store.keyboardHasFullAccess, hint: store.keyboardLastSeen == nil ? "Öffne die Tastatur einmal, dann wird das geprüft" : "In den Tastatur-Einstellungen aktivieren")
-            statusRow("API-Schlüssel", ok: store.hasAPIKey, hint: "Unten eintragen oder in der Tastatur")
+            statusRow(store.usesChatGPT ? "KI über ChatGPT-Abo" : "KI-Zugang", ok: store.hasAPIKey, hint: "Mit ChatGPT anmelden oder API-Schlüssel eintragen")
             statusRow("Einstellungen teilen (App Group)", ok: store.usesAppGroup, hint: "Ohne App Group: alles direkt in der Tastatur einstellen")
             if let seen = store.keyboardLastSeen {
                 (Text("Tastatur zuletzt benutzt: ") + Text(seen, style: .relative))
@@ -127,6 +129,39 @@ struct HomeView: View {
                 if !ok { Text(hint).font(.caption).foregroundStyle(.secondary) }
             }
             Spacer()
+        }
+    }
+
+    private var chatgptCard: some View {
+        GlassCard {
+            CardHeader(title: "ChatGPT-Abo", symbol: "person.crop.circle.badge.checkmark",
+                       subtitle: store.chatgptAccount.isEmpty ? "Ohne API-Schlüssel – nutzt dein Plus/Pro-Kontingent" : "Angemeldet: \(store.chatgptAccount)")
+            if store.chatgptAccount.isEmpty {
+                GlassButton(title: login.busy ? "Anmeldung läuft …" : "Mit ChatGPT anmelden", symbol: "person.badge.key.fill", prominent: true) { login.start() }
+                Text("Du meldest dich auf der offiziellen OpenAI-Seite an (E-Mail, Passwort, 2FA). Die App sieht dein Passwort nie.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Toggle("KI über ChatGPT-Abo", isOn: Binding(
+                    get: { store.aiProvider == "chatgpt" },
+                    set: { store.aiProvider = $0 ? "chatgpt" : "apikey" }
+                ))
+                if !store.chatgptModels.isEmpty {
+                    Picker("Modell", selection: $store.chatgptModel) {
+                        ForEach(store.chatgptModels, id: \.self) { m in
+                            Text(m.count > 1 ? m[1] : m[0]).tag(m[0])
+                        }
+                    }
+                }
+                HStack {
+                    GlassButton(title: "Neu anmelden", symbol: "arrow.clockwise") { login.start() }
+                    GlassButton(title: "Abmelden", symbol: "rectangle.portrait.and.arrow.right") { login.signOut() }
+                }
+            }
+            if let st = login.status {
+                Label(st, systemImage: login.ok ? "checkmark.circle.fill" : (login.busy ? "hourglass" : "info.circle"))
+                    .font(.caption)
+                    .foregroundStyle(login.ok ? .green : (login.busy ? .secondary : .orange))
+            }
         }
     }
 
@@ -163,7 +198,8 @@ struct HomeView: View {
 
     private func saveKey() {
         store.apiKey = keyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard store.hasAPIKey else { keyResult = "Schlüssel entfernt"; keyOK = true; return }
+        guard store.hasKey else { keyResult = "Schlüssel entfernt"; keyOK = true; return }
+        store.aiProvider = "apikey"
         testing = true
         keyResult = nil
         Task {

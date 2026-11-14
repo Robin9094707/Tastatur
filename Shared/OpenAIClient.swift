@@ -285,6 +285,9 @@ final class OpenAIClient {
     // MARK: - Chat mit Fallbacks
 
     func chat(messages: [ChatMessage], model: String? = nil, stream: Bool? = nil, effort: String? = nil, onPartial: ((String) -> Void)? = nil) async throws -> String {
+        if store.usesChatGPT {
+            return try await chatGPTPlan(messages: messages, effort: effort ?? store.reasoningEffort, onPartial: onPartial)
+        }
         guard !key.isEmpty else { throw OpenAIError.missingKey }
         let preferred = (model ?? store.chatModel).trimmingCharacters(in: .whitespaces)
         Self.lock.lock()
@@ -398,6 +401,120 @@ final class OpenAIClient {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    // MARK: - ChatGPT-Abo (Responses-API mit Anmelde-Token)
+
+    private static var planNoEffort = Set<String>()
+
+    /// Anfrage über das ChatGPT-Abo: immer `store: false` und Streaming (so verlangt es OpenAI).
+    private func chatGPTPlan(messages: [ChatMessage], effort: String, onPartial: ((String) -> Void)?) async throws -> String {
+        var candidates: [String] = []
+        let models = store.chatgptModels.compactMap(\.first)
+        for m in [store.chatgptModel] + models + [ChatGPTAuth.defaultModel] where !m.isEmpty && !candidates.contains(m) {
+            candidates.append(m)
+        }
+        var lastError: Error = OpenAIError.invalidResponse
+        for model in candidates.prefix(4) {
+            Self.lock.lock()
+            let useEffort = !Self.planNoEffort.contains(model + "|" + effort)
+            Self.lock.unlock()
+            do {
+                let r = try await planRequest(messages: messages, model: model, effort: useEffort ? effort : nil, onPartial: onPartial)
+                guard !r.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw OpenAIError.empty }
+                return r
+            } catch let error as OpenAIError where error.isModelError {
+                lastError = error
+                continue
+            } catch let error as OpenAIError where error.isParameterError && useEffort {
+                Self.lock.lock(); Self.planNoEffort.insert(model + "|" + effort); Self.lock.unlock()
+                return try await planRequest(messages: messages, model: model, effort: nil, onPartial: onPartial)
+            }
+        }
+        throw lastError
+    }
+
+    private func planRequest(messages: [ChatMessage], model: String, effort: String?, onPartial: ((String) -> Void)?, retried: Bool = false) async throws -> String {
+        let token = try await ChatGPTAuth.validAccessToken(forceRefresh: retried)
+        let instructions = messages.filter { $0.role == "system" }.map(\.content).joined(separator: "\n\n")
+        let input: [[String: Any]] = messages.filter { $0.role != "system" }.map { m in
+            ["type": "message", "role": m.role == "assistant" ? "assistant" : "user", "content": m.content]
+        }
+        var body: [String: Any] = [
+            "model": model,
+            "input": input,
+            "store": false,
+            "stream": true,
+        ]
+        if !instructions.isEmpty { body["instructions"] = instructions }
+        if let effort, !effort.isEmpty, effort != "standard", Self.isReasoningModel(model) {
+            body["reasoning"] = ["effort": effort]
+        }
+        var req = URLRequest(url: URL(string: ChatGPTAuth.apiBase + "/responses")!)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let pair: (URLSession.AsyncBytes, URLResponse)
+        do { pair = try await Self.session.bytes(for: req) } catch { throw OpenAIError.network(error.localizedDescription) }
+        let (bytes, resp) = pair
+        if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            var data = Data()
+            for try await b in bytes { data.append(b) }
+            // Abgelaufenes Token: einmal erneuern und wiederholen
+            if http.statusCode == 401, !retried {
+                return try await planRequest(messages: messages, model: model, effort: effort, onPartial: onPartial, retried: true)
+            }
+            throw Self.planError(status: http.statusCode, data: data)
+        }
+        var text = ""
+        var lastEmit = Date.distantPast
+        var completed = false
+        for try await line in bytes.lines {
+            guard line.hasPrefix("data:") else { continue }
+            let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+            if payload == "[DONE]" { break }
+            guard let data = payload.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let type = json["type"] as? String else { continue }
+            switch type {
+            case "response.output_text.delta":
+                if let piece = json["delta"] as? String {
+                    text += piece
+                    if Date().timeIntervalSince(lastEmit) > 0.05 {
+                        lastEmit = Date()
+                        onPartial?(text)
+                    }
+                }
+            case "response.completed":
+                completed = true
+            case "response.incomplete":
+                completed = !text.isEmpty
+            case "response.failed", "error":
+                let err = ((json["response"] as? [String: Any])?["error"] as? [String: Any]) ?? (json["error"] as? [String: Any]) ?? json
+                let code = err["code"] as? String ?? ""
+                let msg = err["message"] as? String ?? "Anfrage fehlgeschlagen."
+                throw OpenAIError.http(code == "subscription_sharing_usage_limit_exceeded" ? 429 : 400, ChatGPTAuth.message(forCode: code, fallback: msg))
+            default:
+                continue
+            }
+            if completed { break }
+        }
+        if !completed && text.isEmpty { throw OpenAIError.network("Verbindung zu ChatGPT unterbrochen") }
+        onPartial?(text)
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func planError(status: Int, data: Data) -> Error {
+        let json = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        let err = json["error"] as? [String: Any]
+        let code = err?["code"] as? String ?? ""
+        var msg = (err?["message"] as? String) ?? (json["detail"] as? String) ?? String(data: data.prefix(300), encoding: .utf8) ?? ""
+        if let param = err?["param"] as? String, !param.isEmpty { msg += " (\(param))" }
+        if status == 401 { return ChatGPTAuthError.signInAgain(code.isEmpty ? "401" : code) }
+        return OpenAIError.http(status, ChatGPTAuth.message(forCode: code, fallback: msg))
+    }
+
     static func isReasoningModel(_ model: String) -> Bool {
         let m = model.lowercased()
         return m.hasPrefix("o1") || m.hasPrefix("o3") || m.hasPrefix("o4") || m.hasPrefix("gpt-5") || m.hasPrefix("gpt-6")
@@ -441,6 +558,7 @@ final class OpenAIClient {
     // MARK: - Modelle
 
     func listModels() async throws -> [String] {
+        if store.usesChatGPT { return try await ChatGPTAuth.fetchModels().compactMap(\.first) }
         guard !key.isEmpty else { throw OpenAIError.missingKey }
         var req = URLRequest(url: URL(string: base + "/models")!)
         req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")

@@ -44,6 +44,14 @@ final class SharedStore: ObservableObject {
     @Published var streamResponses: Bool = true { didSet { set(streamResponses, "streamResponses") } }
     @Published var outputLanguage: String = "auto" { didSet { set(outputLanguage, "outputLanguage") } }
 
+    // ChatGPT-Abo („Sign in with ChatGPT“): "apikey" oder "chatgpt"
+    @Published var aiProvider: String = "apikey" { didSet { set(aiProvider, "aiProvider") } }
+    /// Angemeldetes ChatGPT-Konto (E-Mail) – leer = nicht angemeldet. Die Tokens liegen in einer eigenen Datei.
+    @Published var chatgptAccount: String = "" { didSet { set(chatgptAccount, "chatgptAccount") } }
+    @Published var chatgptModel: String = "" { didSet { set(chatgptModel, "chatgptModel") } }
+    /// Modelle des Abos: [slug, Anzeigename]
+    @Published var chatgptModels: [[String]] = [] { didSet { setCodable(chatgptModels, "chatgptModels") } }
+
     @Published var personalContext: String = "" { didSet { set(personalContext, "personalContext") } }
     @Published var writingStyle: String = "" { didSet { set(writingStyle, "writingStyle") } }
     @Published var profiles: [ContextProfile] = ContextProfile.defaults { didSet { setCodable(profiles, "profiles") } }
@@ -116,6 +124,10 @@ final class SharedStore: ObservableObject {
         upd(\.knownModels, getCodable("knownModels") ?? [])
         upd(\.streamResponses, bool("streamResponses", true))
         upd(\.outputLanguage, d.string(forKey: "outputLanguage") ?? "auto")
+        upd(\.aiProvider, d.string(forKey: "aiProvider") ?? "apikey")
+        upd(\.chatgptAccount, d.string(forKey: "chatgptAccount") ?? "")
+        upd(\.chatgptModel, d.string(forKey: "chatgptModel") ?? "")
+        upd(\.chatgptModels, getCodable("chatgptModels") ?? [])
         upd(\.personalContext, d.string(forKey: "personalContext") ?? "")
         upd(\.writingStyle, d.string(forKey: "writingStyle") ?? "")
         upd(\.profiles, getCodable("profiles") ?? ContextProfile.defaults)
@@ -248,7 +260,14 @@ final class SharedStore: ObservableObject {
         profiles.first { $0.id.uuidString == activeProfileID }
     }
 
-    var hasAPIKey: Bool { !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    /// Eigener API-Schlüssel eingetragen.
+    var hasKey: Bool { !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    /// KI über das ChatGPT-Abo aktiv (angemeldet und ausgewählt).
+    var usesChatGPT: Bool { aiProvider == "chatgpt" && !chatgptAccount.isEmpty }
+
+    /// KI ist einsatzbereit – per ChatGPT-Abo oder API-Schlüssel.
+    var hasAPIKey: Bool { usesChatGPT || hasKey }
 
     // MARK: - Zwischenablage-Verlauf (Datei, damit beide Prozesse sauber lesen/schreiben)
 

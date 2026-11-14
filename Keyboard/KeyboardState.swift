@@ -887,7 +887,7 @@ final class KeyboardState: ObservableObject {
             return false
         }
         if !store.hasAPIKey {
-            showToast("Kein API-Schlüssel – ✨ → Einstellungen → KI & API")
+            showToast("Kein KI-Zugang – ⚙︎ → KI & API: mit ChatGPT anmelden oder API-Schlüssel")
             return false
         }
         return true
@@ -1183,6 +1183,7 @@ final class KeyboardState: ObservableObject {
         case .apiKey:
             let key = text.replacingOccurrences(of: " ", with: "")
             store.apiKey = key
+            if !key.isEmpty { store.aiProvider = "apikey" }
             showToast(key.isEmpty ? "API-Schlüssel entfernt" : "API-Schlüssel gespeichert ✓")
         case .baseURL:
             store.baseURL = text.isEmpty ? "https://api.openai.com/v1" : text.replacingOccurrences(of: " ", with: "")
@@ -1981,6 +1982,7 @@ final class KeyboardState: ObservableObject {
             return
         }
         store.apiKey = s
+        store.aiProvider = "apikey"
         showToast("API-Schlüssel gespeichert ✓")
     }
 

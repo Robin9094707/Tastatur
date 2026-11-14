@@ -127,8 +127,9 @@ struct MissingSetupBanner: View {
             if !state.hasFullAccess {
                 Label("Aktiviere „Vollen Zugriff erlauben“ in Einstellungen → Allgemein → Tastatur → Tastaturen → Tastatur KI.", systemImage: "lock.fill")
             } else if !state.store.hasAPIKey {
-                Label("Kein API-Schlüssel. Füge ihn aus der Zwischenablage ein oder tippe ihn direkt hier ein:", systemImage: "key.fill")
+                Label("Kein KI-Zugang. Melde dich mit deinem ChatGPT-Abo an oder füge einen API-Schlüssel ein:", systemImage: "key.fill")
                 HStack {
+                    Button("Mit ChatGPT anmelden") { state.openApp("chatgpt-login") }
                     Button("Einfügen") { state.pasteAPIKey() }
                     Button("Eintippen") { state.beginInput(.apiKey) }
                 }
@@ -637,7 +638,7 @@ struct KeyboardSettingsPanel: View {
             Text("Profil").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             profileChips
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                navTile("KI & API", "key.fill", store.hasAPIKey ? "Verbunden" : "Schlüssel fehlt", .ai)
+                navTile("KI & API", "key.fill", store.usesChatGPT ? "ChatGPT-Abo" : (store.hasKey ? "API-Schlüssel" : "Nicht verbunden"), .ai)
                 navTile("Kontext", "person.text.rectangle", store.personalContext.isEmpty ? "Leer" : "Aktiv", .context)
                 navTile("Design", "paintbrush.pointed", (KeyStyle(rawValue: store.keyStyle) ?? .glass).label, .design)
                 navTile("Tippen", "keyboard", store.autocorrect ? "Autokorrektur an" : "Autokorrektur aus", .typing)
@@ -654,12 +655,39 @@ struct KeyboardSettingsPanel: View {
 
     private var aiPage: some View {
         VStack(alignment: .leading, spacing: 10) {
-            row("API-Schlüssel", store.hasAPIKey ? maskedKey : "Nicht gesetzt", "key.fill") {
+            Text("KI-Zugang").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                chip("ChatGPT-Abo", selected: store.aiProvider == "chatgpt") {
+                    if store.chatgptAccount.isEmpty { state.openApp("chatgpt-login") } else { store.aiProvider = "chatgpt" }
+                }
+                chip("API-Schlüssel", selected: store.aiProvider != "chatgpt") { store.aiProvider = "apikey" }
+            }
+            if store.aiProvider == "chatgpt" || !store.chatgptAccount.isEmpty {
+                if store.chatgptAccount.isEmpty {
+                    row("ChatGPT", "Nicht angemeldet – tippen zum Anmelden", "person.crop.circle.badge.plus") { state.openApp("chatgpt-login") }
+                } else {
+                    row("ChatGPT", store.chatgptAccount, "person.crop.circle.badge.checkmark") { state.openApp("chatgpt-login") }
+                }
+                if store.aiProvider == "chatgpt", !store.chatgptModels.isEmpty {
+                    Text("Modell (Abo)").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(store.chatgptModels, id: \.self) { m in
+                                chip(m.count > 1 ? m[1] : m[0], selected: store.chatgptModel == m[0]) { store.chatgptModel = m[0] }
+                            }
+                        }
+                    }
+                }
+                Text("Anmeldung öffnet kurz die App – dort meldest du dich auf der OpenAI-Seite an (E-Mail, Passwort, 2FA).")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            if store.aiProvider != "chatgpt" {
+            row("API-Schlüssel", store.hasKey ? maskedKey : "Nicht gesetzt", "key.fill") {
                 state.beginInput(.apiKey, prefill: "")
             }
             HStack {
                 actionButton("Aus Ablage einfügen", "doc.on.clipboard") { state.pasteAPIKey() }
-                if store.hasAPIKey {
+                if store.hasKey {
                     actionButton("Entfernen", "trash") { store.apiKey = ""; state.showToast("API-Schlüssel entfernt") }
                 }
             }
@@ -676,6 +704,7 @@ struct KeyboardSettingsPanel: View {
                         state.beginInput(.chatModel, prefill: store.chatModel)
                     }
                 }
+            }
             }
             grid {
                 toggle("Live-Korrektur", "checkmark.seal", $store.liveAICorrection)

@@ -58,7 +58,7 @@ final class KeyboardViewController: UIInputViewController {
         state.textDidChange()
     }
 
-    /// Öffnet eine URL aus der Tastatur heraus (z. B. die App für die Diktat-Sitzung).
+    /// Öffnet eine URL aus der Tastatur heraus (z. B. die App für Einstellungen).
     func openURL(_ url: URL) {
         var responder: UIResponder? = self
         let selector = sel_registerName("openURL:options:completionHandler:")

@@ -3,23 +3,22 @@
 KI-Tastatur für iOS mit eigenem OpenAI-API-Schlüssel – komplett auf Deutsch, im Liquid-Glass-Design.
 
 ## Funktionen
-- **QWERTZ-Tastatur** mit Umlauten, Long-Press-Akzenten (z. B. s → ß), Zahlen/Symbolen, Emoji-Panel, Cursor-Steuerung per Wischen über die Leertaste, Haptik und Klick-Ton
-- **Autokorrektur** (lässt sich mit ⌫ rückgängig machen), **Autovervollständigung** und **Wortvorhersage**, lernt deine Wörter, optional **KI-Wortvorschläge**
-- **KI-Aktionen**: Korrigieren, Zusammenfassen, Umformulieren, Formell/Locker, Kürzen, Erweitern, Übersetzen, Antworten, Emojis, Stichpunkte + **eigene Aktionen**
-- **KI schreiben lassen**: Aufgabe direkt in der Tastatur eintippen
-- **Eigener Kontext**: „Über mich“, Schreibstil, Profile (Arbeit/Privat …) – direkt in der Tastatur umschaltbar
-- **Makros/Textbausteine** mit Auto-Ersetzen (`mfg` + Leertaste), Platzhaltern (`{datum}`, `{uhrzeit}`, `{zwischenablage}`) und KI-Makros
-- **Zwischenablage-Verlauf** mit Anheften
-- **Diktat** über OpenAI `gpt-transcribe` (Fallback: `gpt-4o-mini-transcribe`, `whisper-1`) mit KI-Aufbereitung (Füllwörter weg, Satzzeichen, „neue Zeile“ …)
+- **Schnelle UIKit-Tastatur** (QWERTZ) mit Multitouch, Tasten-Vorschau, Akzent-Auswahl per Wischen (s → ß), Zahlen/Symbolen, Emojis, Cursor-Steuerung über die Leertaste, Haptik und Klick-Ton
+- **Autokorrektur** (mit ⌫ rückgängig), **Autovervollständigung** und **Wortvorhersage**, lernt deine Wörter, optional **KI-Wortvorschläge**
+- **KI-Aktionen** in Kategorien: Zusammenfassen (Kurz, Ausführlich, Stichpunkte, TL;DR, To-dos), Bearbeiten (Korrigieren mit markierten Änderungen, Verbessern, Umformulieren, Kürzen, Ausbauen, Gliedern, Antworten, Erklären), Ton, Übersetzen + **eigene Aktionen**
+- **Große Texte**: Die Tastatur liest den kompletten Text im Feld ein (nicht nur den sichtbaren Ausschnitt). Sehr lange Texte werden in Abschnitten verarbeitet. Quelle wählbar: Feld, Absatz oder Zwischenablage
+- **Live-Antworten** (Streaming), **Verfeinern** (Kürzer, Formeller, eigene Anweisung …), Ersetzen/Einfügen/Kopieren
+- **KI-Werkstatt** in der App für beliebig lange Texte
+- **Eigener Kontext**: „Über mich“, Schreibstil, Profile (Arbeit/Privat …)
+- **Makros/Textbausteine** mit Auto-Ersetzen (`mfg` + Leertaste), Platzhaltern und KI-Makros
+- **Zwischenablage-Verlauf** mit Anheften und Ein-Tipp-Zusammenfassung
+- Standardmodell **GPT-6 Luna** (günstigstes und neuestes Modell, ~0,10 $ / 0,50 $ pro 1 Mio. Tokens) mit automatischem Fallback
 
 ## Installation
 1. Unter **Actions → IPA bauen** das Artefakt `Tastatur-KI-ipa` herunterladen.
 2. Die IPA mit Sideloadly/AltStore (o. Ä.) installieren. Die App-Group `group.de.tastatur.app` ist in den Entitlements enthalten.
 3. Einstellungen → Allgemein → Tastatur → Tastaturen → „Tastatur KI“ hinzufügen → **Vollen Zugriff erlauben**.
 4. In der App unter **KI** den OpenAI-Schlüssel eintragen und testen.
-
-## Diktat – so funktioniert's
-Tastatur-Erweiterungen dürfen unter iOS das Mikrofon nicht nutzen. Deshalb nimmt die App im Hintergrund auf: Beim ersten Tippen auf 🎙 öffnet sich kurz die App und startet eine Diktat-Sitzung. Danach oben links mit „◀︎ Zurück“ zurückwechseln. Solange die Sitzung läuft (einstellbar, Standard 5 Min.), funktioniert 🎙 direkt in der Tastatur.
 
 ## Build
 `xcodegen generate` → `xcodebuild` (siehe `.github/workflows/build.yml`). Läuft auf `macos-26` mit Xcode 26.

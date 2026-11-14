@@ -2,8 +2,8 @@ import UIKit
 import SwiftUI
 import AudioToolbox
 
-enum KeyboardLayer { case letters, numbers, symbols }
-enum ShiftState { case off, on, caps }
+enum KeyboardLayer: Equatable { case letters, numbers, symbols }
+enum ShiftState: Equatable { case off, on, caps }
 
 enum Panel: Equatable {
     case none
@@ -13,20 +13,11 @@ enum Panel: Equatable {
     case clipboard
     case macros
     case emoji
-    case dictation
     case settings
 }
 
-enum DictationPhase: Equatable {
-    case connecting
-    case openingApp
-    case recording
-    case processing
-    case failed(String)
-}
-
 struct Suggestion: Identifiable, Equatable {
-    enum Kind { case word, typed, correction, macro, ai, accent, replacement }
+    enum Kind { case word, typed, correction, macro, ai }
     let id = UUID()
     var text: String
     var kind: Kind
@@ -46,50 +37,54 @@ final class KeyboardState: ObservableObject {
     @Published var suggestions: [Suggestion] = []
     @Published var hasFullAccess = false
     @Published var needsGlobe = true
-    @Published var returnTitle = "return"
-    @Published var isDark = false
+    @Published var returnTitle = "⏎"
     @Published var toast: String?
 
     // KI
+    @Published var sourceMode: AIScope = .auto
     @Published var aiBusy = false
+    @Published var aiStatus = ""
     @Published var aiResult = ""
+    @Published var aiOriginal = ""
+    @Published var aiShowDiff = false
     @Published var aiError: String?
     @Published var aiTitle = ""
     @Published var composeMode = false
+    @Published var composeIsRefine = false
     @Published var composeText = ""
-    private var lastAIAction: (() -> Void)?
-    private var replaceTarget: ReplaceTarget = .none
+    private var lastRun: (() -> Void)?
+    private var aiTask: Task<Void, Never>?
+    private(set) var replaceTarget: ReplaceTarget = .none
 
     // Zwischenablage
     @Published var clips: [ClipItem] = []
     private var lastChangeCount = -1
     private var clipTimer: Timer?
 
-    // Diktat
-    @Published var dictation: DictationPhase = .connecting
-    @Published var dictationLevel: Float = 0
-    private var dictationTimer: Timer?
-    private var gotPong = false
-    private var lastHandledStatus = ""
-    private var dictationStartedAt = Date()
-
     // Tippen
     private var lastSpaceTime = Date.distantPast
     private var lastShiftTap = Date.distantPast
     private var undoCorrection: (original: String, corrected: String, trailing: String)?
     private var aiSuggestionTask: Task<Void, Never>?
+    private var refreshWork: DispatchWorkItem?
     private var deleteTimer: Timer?
     private var deleteCount = 0
+    private let impact = UIImpactFeedbackGenerator(style: .light)
+    private let impactMedium = UIImpactFeedbackGenerator(style: .medium)
+    private let selection = UISelectionFeedbackGenerator()
 
     var onHeightChange: ((CGFloat) -> Void)?
 
-    let toolbarHeight: CGFloat = 46
-    var keyRowHeight: CGFloat { UIScreen.main.bounds.width > UIScreen.main.bounds.height ? 40 : 52 }
+    let toolbarHeight: CGFloat = 48
+    var keyRowHeight: CGFloat {
+        let size = controller?.view.window?.windowScene?.screen.bounds.size ?? UIScreen.main.bounds.size
+        return size.width > size.height ? 40 : 54
+    }
     var rowCount: Int { store.showNumberRow && layer == .letters ? 5 : 4 }
-    var keysHeight: CGFloat { CGFloat(rowCount) * keyRowHeight + 10 }
+    var keysHeight: CGFloat { CGFloat(rowCount) * keyRowHeight + 8 }
     var totalHeight: CGFloat { toolbarHeight + keysHeight }
 
-    enum ReplaceTarget { case none, selection, all(before: Int, after: Int), range(before: Int, after: Int) }
+    enum ReplaceTarget { case none, selection, all(length: Int), range(before: Int, after: Int) }
 
     init(controller: KeyboardViewController) {
         self.controller = controller
@@ -102,16 +97,16 @@ final class KeyboardState: ObservableObject {
 
     func appear() {
         store.reload()
+        sourceMode = store.aiScope
         hasFullAccess = controller?.hasFullAccess ?? false
         needsGlobe = controller?.needsInputModeSwitchKey ?? true
         controller?.requestSupplementaryLexicon { [weak self] lex in self?.engine.setLexicon(lex) }
         onHeightChange?(totalHeight)
+        impact.prepare()
         updateReturnKey()
         updateAutoShift()
-        refreshSuggestions()
+        refreshSuggestionsNow()
         startClipboardWatch()
-        setupDictationObservers()
-        if panel == .dictation { resumeDictationCheck() }
     }
 
     func disappear() {
@@ -122,34 +117,46 @@ final class KeyboardState: ObservableObject {
     }
 
     func textDidChange() {
-        isDark = proxy?.keyboardAppearance == .dark
         updateReturnKey()
         if !composeMode {
             updateAutoShift()
-            refreshSuggestions()
+            scheduleRefresh()
         }
     }
 
     private func updateReturnKey() {
+        let title: String
         switch proxy?.returnKeyType ?? .default {
-        case .go: returnTitle = "Los"
-        case .google, .yahoo, .search: returnTitle = "Suchen"
-        case .join: returnTitle = "Beitreten"
-        case .next: returnTitle = "Weiter"
-        case .send: returnTitle = "Senden"
-        case .done: returnTitle = "Fertig"
-        case .continue: returnTitle = "Weiter"
-        case .route: returnTitle = "Route"
-        case .emergencyCall: returnTitle = "Notruf"
-        default: returnTitle = "⏎"
+        case .go: title = "Los"
+        case .google, .yahoo, .search: title = "Suchen"
+        case .join: title = "Beitreten"
+        case .next, .continue: title = "Weiter"
+        case .send: title = "Senden"
+        case .done: title = "Fertig"
+        case .route: title = "Route"
+        case .emergencyCall: title = "Notruf"
+        default: title = "⏎"
         }
+        if composeMode { if returnTitle != "Senden" { returnTitle = "Senden" }; return }
+        if title != returnTitle { returnTitle = title }
     }
 
     // MARK: - Feedback
 
+    /// Sofortiges Feedback beim Herunterdrücken einer Taste.
+    func keyDownFeedback(special: Bool) {
+        if store.keySound { AudioServicesPlaySystemSound(special ? 1156 : 1104) }
+        if store.haptics, hasFullAccess {
+            impact.impactOccurred(intensity: special ? 0.8 : 0.6)
+            impact.prepare()
+        }
+    }
+
     func feedback(_ style: UIImpactFeedbackGenerator.FeedbackStyle = .light) {
         if store.keySound { AudioServicesPlaySystemSound(1104) }
-        if store.haptics, hasFullAccess { UIImpactFeedbackGenerator(style: style).impactOccurred() }
+        if store.haptics, hasFullAccess {
+            if style == .medium || style == .heavy { impactMedium.impactOccurred() } else { impact.impactOccurred() }
+        }
     }
 
     func showToast(_ text: String) {
@@ -165,7 +172,6 @@ final class KeyboardState: ObservableObject {
     var after: String { proxy?.documentContextAfterInput ?? "" }
     var selected: String { proxy?.selectedText ?? "" }
 
-    /// Das gerade getippte (unvollständige) Wort vor dem Cursor.
     var currentWord: String {
         var word = ""
         for ch in before.reversed() {
@@ -180,7 +186,7 @@ final class KeyboardState: ObservableObject {
         return words.last.map(String.init)
     }
 
-    // MARK: - Eingabe
+    // MARK: - Eingabe (schneller Pfad)
 
     func insert(_ text: String) {
         if composeMode {
@@ -189,46 +195,52 @@ final class KeyboardState: ObservableObject {
         }
         undoCorrection = nil
         proxy?.insertText(text)
-        if layer != .letters, text == " " || text == "'" {
-            // nach Leerzeichen zurück zu Buchstaben (wie iOS)
-            layer = .letters
-        }
         if shift == .on { shift = .off }
-        if text == " " || text == "\n" || ".,!?;:".contains(text) { updateAutoShift() }
-        refreshSuggestions()
+        scheduleRefresh()
+    }
+
+    func insertAlternate(_ s: String) {
+        insert(s)
     }
 
     func tapKey(_ key: String) {
-        feedback()
-        let output: String
-        if shift != .off, layer == .letters { output = key.uppercased() } else { output = key }
-        if !composeMode, ".,!?;:".contains(output), let last = before.last, last == " ", undoCorrection == nil, before.count >= 2 {
-            // Leerzeichen vor Satzzeichen entfernen
-            let beforeLast = before.dropLast().last
-            if let b = beforeLast, b.isLetter || b.isNumber {
+        let output = (shift != .off && layer == .letters) ? key.uppercased() : key
+        if composeMode {
+            composeText += output
+            if shift == .on { shift = .off }
+            return
+        }
+        let isPunct = output.count == 1 && ".,!?;:".contains(output)
+        if isPunct {
+            let b = before
+            if b.hasSuffix(" "), undoCorrection == nil, let prev = b.dropLast().last, prev.isLetter || prev.isNumber {
+                // „Wort .“ → „Wort. “
                 proxy?.deleteBackward()
                 proxy?.insertText(output + " ")
-                updateAutoShift()
-                refreshSuggestions()
+                afterCommit()
                 return
             }
+            commitWord(trailing: output)
+            return
         }
-        if !composeMode, ".,!?;:".contains(output) { commitWord(trailing: output) ; return }
-        insert(output)
+        undoCorrection = nil
+        proxy?.insertText(output)
+        if shift == .on { shift = .off }
+        if layer != .letters, output == "'" { layer = .letters }
+        scheduleRefresh()
     }
 
     func tapSpace() {
-        feedback()
         if composeMode { composeText += " "; return }
         let now = Date()
-        if store.doubleSpacePeriod, now.timeIntervalSince(lastSpaceTime) < 0.45, before.hasSuffix(" "),
-           let c = before.dropLast().last, c.isLetter || c.isNumber {
+        let b = before
+        if store.doubleSpacePeriod, now.timeIntervalSince(lastSpaceTime) < 0.45, b.hasSuffix(" "),
+           let c = b.dropLast().last, c.isLetter || c.isNumber {
             proxy?.deleteBackward()
             proxy?.insertText(". ")
             lastSpaceTime = .distantPast
             undoCorrection = nil
-            updateAutoShift()
-            refreshSuggestions()
+            afterCommit()
             return
         }
         lastSpaceTime = now
@@ -236,7 +248,6 @@ final class KeyboardState: ObservableObject {
     }
 
     func tapReturn() {
-        feedback()
         if composeMode { sendCompose(); return }
         commitWord(trailing: "\n")
     }
@@ -245,7 +256,6 @@ final class KeyboardState: ObservableObject {
     private func commitWord(trailing: String) {
         let word = currentWord
         let prev = previousWord
-        var finalWord = word
 
         if !word.isEmpty {
             if store.macroAutoExpand, let macro = store.macros.first(where: { !$0.shortcut.isEmpty && $0.shortcut.lowercased() == word.lowercased() }) {
@@ -264,13 +274,12 @@ final class KeyboardState: ObservableObject {
                 deleteChars(word.count)
                 proxy?.insertText(corr + trailing)
                 undoCorrection = (word, corr, trailing)
-                finalWord = corr
                 store.incrementStat("corrections")
-                engine.learn(word: finalWord, previous: prev)
+                engine.learn(word: corr, previous: prev)
                 afterCommit()
                 return
             }
-            engine.learn(word: finalWord, previous: prev)
+            engine.learn(word: word, previous: prev)
         }
         proxy?.insertText(trailing)
         undoCorrection = nil
@@ -295,7 +304,7 @@ final class KeyboardState: ObservableObject {
         if layer != .letters { layer = .letters }
         if shift == .on { shift = .off }
         updateAutoShift()
-        refreshSuggestions()
+        scheduleRefresh()
     }
 
     private func deleteChars(_ n: Int) {
@@ -303,43 +312,38 @@ final class KeyboardState: ObservableObject {
     }
 
     func tapDelete() {
-        feedback(.soft)
         if composeMode {
             if !composeText.isEmpty { composeText.removeLast() }
             return
         }
-        // Autokorrektur rückgängig machen
         if let undo = undoCorrection, before.hasSuffix(undo.corrected + undo.trailing) {
             deleteChars(undo.corrected.count + undo.trailing.count)
             proxy?.insertText(undo.original)
             engine.learn(word: undo.original, previous: nil, weight: 3)
             undoCorrection = nil
-            refreshSuggestions()
+            scheduleRefresh()
             return
         }
         undoCorrection = nil
-        if !selected.isEmpty {
-            proxy?.deleteBackward()
-        } else {
-            proxy?.deleteBackward()
-        }
+        proxy?.deleteBackward()
         updateAutoShift()
-        refreshSuggestions()
+        scheduleRefresh()
     }
 
     func startDelete() {
         tapDelete()
         deleteCount = 0
         deleteTimer?.invalidate()
-        deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.42, repeats: false) { [weak self] _ in
-            self?.deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
+        deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
+            self?.deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.07, repeats: true) { [weak self] _ in
                 guard let self else { return }
                 self.deleteCount += 1
-                if self.deleteCount > 18, !self.composeMode {
+                if self.deleteCount > 15, !self.composeMode {
                     self.deleteWord()
                 } else {
                     self.tapDelete()
                 }
+                if self.store.haptics, self.hasFullAccess { self.selection.selectionChanged() }
             }
         }
     }
@@ -363,14 +367,12 @@ final class KeyboardState: ObservableObject {
             count += 1
         }
         deleteChars(max(1, count))
-        feedback(.soft)
-        refreshSuggestions()
+        scheduleRefresh()
     }
 
     func tapShift() {
-        feedback()
         let now = Date()
-        if now.timeIntervalSince(lastShiftTap) < 0.35 {
+        if now.timeIntervalSince(lastShiftTap) < 0.3 {
             shift = .caps
         } else {
             shift = shift == .off ? .on : .off
@@ -381,49 +383,59 @@ final class KeyboardState: ObservableObject {
     func moveCursor(_ offset: Int) {
         guard offset != 0 else { return }
         proxy?.adjustTextPosition(byCharacterOffset: offset)
-        if store.haptics, hasFullAccess { UISelectionFeedbackGenerator().selectionChanged() }
+        if store.haptics, hasFullAccess { selection.selectionChanged() }
     }
 
     func cursorMoveEnded() {
         updateAutoShift()
-        refreshSuggestions()
+        scheduleRefresh()
     }
 
     func updateAutoShift() {
-        guard layer == .letters, shift != .caps else { return }
-        guard store.autocapitalize, let proxy else { shift = .off; return }
-        if proxy.autocapitalizationType == UITextAutocapitalizationType.none { shift = .off; return }
-        if proxy.autocapitalizationType == .allCharacters { shift = .on; return }
-        let text = before
-        if text.isEmpty { shift = .on; return }
-        if proxy.autocapitalizationType == .words, text.last?.isWhitespace == true { shift = .on; return }
-        let trimmed = text.replacingOccurrences(of: " ", with: "")
-        if text.last == "\n" { shift = .on; return }
-        if text.last == " ", let last = trimmed.last, ".!?".contains(last) { shift = .on; return }
-        shift = .off
+        guard layer == .letters, shift != .caps, !composeMode else { return }
+        var newShift: ShiftState = .off
+        if store.autocapitalize, let proxy {
+            let type = proxy.autocapitalizationType ?? .sentences
+            if type == .allCharacters {
+                newShift = .on
+            } else if type != UITextAutocapitalizationType.none {
+                let text = before
+                if text.isEmpty || text.last == "\n" {
+                    newShift = .on
+                } else if type == .words, text.last?.isWhitespace == true {
+                    newShift = .on
+                } else if text.last == " " {
+                    let trimmed = text.trimmingCharacters(in: .whitespaces)
+                    if let last = trimmed.last, ".!?".contains(last) { newShift = .on }
+                }
+            }
+        }
+        if newShift != shift { shift = newShift }
     }
 
-    // MARK: - Vorschläge
+    // MARK: - Vorschläge (entkoppelt vom Tippen)
 
-    func refreshSuggestions() {
+    func scheduleRefresh() {
+        refreshWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.refreshSuggestionsNow() }
+        refreshWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: work)
+    }
+
+    func refreshSuggestionsNow() {
         aiSuggestionTask?.cancel()
-        if composeMode || panel != .none && panel != .tools { return }
+        if composeMode || (panel != .none && panel != .tools) { return }
         let word = currentWord
         var list: [Suggestion] = []
 
         if !word.isEmpty {
-            // Makro-Treffer
             if let macro = store.macros.first(where: { !$0.shortcut.isEmpty && $0.shortcut.lowercased() == word.lowercased() }) {
                 list.append(Suggestion(text: macro.shortcut, kind: .macro, display: "⚡︎ " + macro.title))
             }
             var correction: String?
             if store.autocorrect, shouldAutocorrect { correction = engine.correction(for: word) }
-            if let correction {
-                list.append(Suggestion(text: word, kind: .typed, display: "„\(word)“"))
-                list.append(Suggestion(text: correction, kind: .correction))
-            } else {
-                list.append(Suggestion(text: word, kind: .typed, display: "„\(word)“"))
-            }
+            list.append(Suggestion(text: word, kind: .typed, display: "„\(word)“"))
+            if let correction { list.append(Suggestion(text: correction, kind: .correction)) }
             for c in engine.completions(prefix: word, previousWord: previousWord, limit: 3) where !list.contains(where: { $0.text == c }) {
                 list.append(Suggestion(text: c, kind: .word))
             }
@@ -432,12 +444,15 @@ final class KeyboardState: ObservableObject {
                 list.append(Suggestion(text: p, kind: .word))
             }
         }
-        suggestions = Array(list.prefix(3))
+        let newList = Array(list.prefix(3))
+        if newList.map(\.text) != suggestions.map(\.text) || newList.map(\.kind) != suggestions.map(\.kind) {
+            suggestions = newList
+        }
 
         if store.aiSuggestions, hasFullAccess, store.hasAPIKey, before.count > 8 {
             let context = before
             aiSuggestionTask = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 650_000_000)
+                try? await Task.sleep(nanoseconds: 700_000_000)
                 guard !Task.isCancelled, let self else { return }
                 guard let result = try? await self.client.suggestions(context: context), !Task.isCancelled else { return }
                 await MainActor.run {
@@ -460,22 +475,15 @@ final class KeyboardState: ObservableObject {
                 deleteChars(currentWord.count)
                 runMacro(macro, trailing: " ")
             }
-        case .accent:
-            if composeMode { composeText += s.text } else { proxy?.insertText(s.text) }
-            if shift == .on { shift = .off }
-            refreshSuggestions()
         case .typed:
             engine.learn(word: s.text, previous: previousWord, weight: 2)
             proxy?.insertText(" ")
             undoCorrection = nil
             afterCommit()
         case .ai:
-            // KI-Vorschläge können Wortfortsetzung oder neue Wörter sein
             let word = currentWord
             if !word.isEmpty, s.text.lowercased().hasPrefix(word.lowercased()) {
                 deleteChars(word.count)
-            } else if !word.isEmpty {
-                proxy?.insertText(" ")
             } else if let last = before.last, !last.isWhitespace {
                 proxy?.insertText(" ")
             }
@@ -492,22 +500,14 @@ final class KeyboardState: ObservableObject {
         }
     }
 
-    /// Long-Press-Alternativen (Umlaute, Akzente) in der Vorschlagsleiste anzeigen.
-    func showAlternates(for key: String) {
-        guard let alts = KeyLayouts.alternates[key.lowercased()] else { return }
-        feedback(.medium)
-        let upper = shift != .off
-        suggestions = alts.map { Suggestion(text: upper ? $0.uppercased() : $0, kind: .accent) }
-    }
-
     // MARK: - Makros
 
     func runMacro(_ macro: Macro, trailing: String = "") {
         store.incrementStat("macros")
         if macro.isAI {
             let context = before + after
-            runAI(title: macro.title, replace: .none) { [client = self.client] in
-                try await client.compose(prompt: macro.text, context: context)
+            runAI(title: macro.title, original: "", target: .none, showDiff: false) { [client = self.client] partial in
+                try await client.compose(prompt: macro.text, context: context, onPartial: partial)
             }
             return
         }
@@ -532,135 +532,283 @@ final class KeyboardState: ObservableObject {
         return true
     }
 
-    /// Ermittelt den Text, auf den eine KI-Aktion angewendet wird.
-    private func sourceText() -> (text: String, target: ReplaceTarget, context: String?) {
-        let sel = selected
-        let b = before
-        let a = after
-        switch store.aiScope {
-        case .selection:
-            return (sel, .selection, store.useAppContext ? b + a : nil)
-        case .all:
-            if !sel.isEmpty { return (sel, .selection, store.useAppContext ? b + a : nil) }
-            return (b + a, .all(before: b.count, after: a.count), nil)
-        case .sentence:
-            if !sel.isEmpty { return (sel, .selection, store.useAppContext ? b + a : nil) }
-            let startIdx = b.lastIndex(where: { $0 == "\n" }).map { b.index(after: $0) } ?? b.startIndex
-            let head = String(b[startIdx...])
-            let endIdx = a.firstIndex(where: { $0 == "\n" }) ?? a.endIndex
-            let tail = String(a[..<endIdx])
-            return (head + tail, .range(before: head.count, after: tail.count), store.useAppContext ? b + a : nil)
-        case .auto:
-            if !sel.isEmpty { return (sel, .selection, store.useAppContext ? b + a : nil) }
-            return (b + a, .all(before: b.count, after: a.count), nil)
+    /// Wartet kurz, bis das Textfeld den neuen Kontext gemeldet hat.
+    @MainActor
+    private func waitForContextChange(from old: String?) async {
+        for _ in 0..<10 {
+            try? await Task.sleep(nanoseconds: 12_000_000)
+            if proxy?.documentContextBeforeInput != old { return }
         }
+    }
+
+    @MainActor
+    private func moveToEnd() async {
+        for _ in 0..<1000 {
+            let a = after
+            if a.isEmpty { return }
+            let old = proxy?.documentContextBeforeInput
+            proxy?.adjustTextPosition(byCharacterOffset: a.utf16.count)
+            await waitForContextChange(from: old)
+        }
+    }
+
+    /// Liest den kompletten Text des Feldes ein – auch wenn iOS nur Ausschnitte liefert.
+    @MainActor
+    func readFullText() async -> String {
+        await moveToEnd()
+        var collected = ""
+        var movedBack = 0
+        for _ in 0..<4000 {
+            let b = before
+            if b.isEmpty { break }
+            collected = b + collected
+            let n = b.utf16.count
+            proxy?.adjustTextPosition(byCharacterOffset: -n)
+            movedBack += n
+            await waitForContextChange(from: b)
+            if before == b { break } // Feld bewegt sich nicht weiter
+            if collected.count > 3_000_000 { break }
+        }
+        if movedBack > 0 {
+            proxy?.adjustTextPosition(byCharacterOffset: movedBack)
+            try? await Task.sleep(nanoseconds: 30_000_000)
+        }
+        await moveToEnd()
+        return collected
+    }
+
+    @MainActor
+    private func gatherSource() async -> (text: String, target: ReplaceTarget, context: String?)? {
+        if sourceMode == .clipboard {
+            guard let s = UIPasteboard.general.string, !s.isEmpty else {
+                showToast("Die Zwischenablage ist leer.")
+                return nil
+            }
+            return (s, .none, nil)
+        }
+        let sel = selected
+        if !sel.isEmpty {
+            let ctx = store.useAppContext ? String((before + "[…]" + after).suffix(4000)) : nil
+            return (sel, .selection, ctx)
+        }
+        if sourceMode == .paragraph {
+            let b = before, a = after
+            let startIdx = b.lastIndex(of: "\n").map { b.index(after: $0) } ?? b.startIndex
+            let head = String(b[startIdx...])
+            let endIdx = a.firstIndex(of: "\n") ?? a.endIndex
+            let tail = String(a[..<endIdx])
+            if !(head + tail).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return (head + tail, .range(before: head.count, after: tail.count), store.useAppContext ? b + a : nil)
+            }
+        }
+        aiStatus = "Lese Text ein …"
+        let full = await readFullText()
+        return (full, .all(length: full.count), nil)
     }
 
     func runAction(_ action: AIAction) {
         guard requireAI() else { return }
-        let source = sourceText()
-        guard !source.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            showToast("Kein Text vorhanden – tippe oder markiere zuerst etwas.")
-            return
-        }
-        let instruction = action.prompt
-        let ctx = source.context
-        let text = source.text
-        runAI(title: action.title, replace: source.target) { [client = self.client] in
-            try await client.transform(text: text, instruction: instruction, appContext: ctx)
+        startAI(title: action.title, showDiff: action.showDiff) { [weak self] in
+            guard let self else { return nil }
+            guard let source = await self.gatherSource() else { return nil }
+            return source
+        } work: { [client = self.client] text, context, partial in
+            try await client.transform(text: text, instruction: action.prompt, appContext: context, onPartial: partial)
         }
     }
 
-    func runAI(title: String, replace: ReplaceTarget, _ work: @escaping () async throws -> String) {
-        guard requireAI() else { return }
+    /// Führt eine KI-Aktion mit vorheriger Quell-Ermittlung aus.
+    private func startAI(title: String, showDiff: Bool,
+                         source: @escaping () async -> (text: String, target: ReplaceTarget, context: String?)?,
+                         work: @escaping (String, String?, @escaping (String) -> Void) async throws -> String) {
+        aiTask?.cancel()
         aiTitle = title
         aiResult = ""
+        aiOriginal = ""
         aiError = nil
         aiBusy = true
-        replaceTarget = replace
+        aiStatus = "Bereite vor …"
+        aiShowDiff = showDiff
         composeMode = false
         panel = .result
-        lastAIAction = { [weak self] in self?.runAI(title: title, replace: replace, work) }
         store.incrementStat("aiActions")
-        Task { [weak self] in
-            do {
-                let result = try await work()
-                await MainActor.run {
-                    self?.aiResult = result
-                    self?.aiBusy = false
-                }
-            } catch {
-                await MainActor.run {
-                    self?.aiError = error.localizedDescription
-                    self?.aiBusy = false
-                }
+        lastRun = { [weak self] in self?.startAI(title: title, showDiff: showDiff, source: source, work: work) }
+        aiTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard let src = await source() else {
+                self.aiBusy = false
+                self.panel = .ai
+                return
             }
+            guard !src.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                self.aiBusy = false
+                self.panel = .ai
+                self.showToast("Kein Text vorhanden – tippe, markiere oder kopiere zuerst etwas.")
+                return
+            }
+            self.replaceTarget = src.target
+            self.aiOriginal = src.text
+            let words = src.text.wordCount
+            self.aiStatus = words > 400 ? "KI liest \(words) Wörter …" : "KI schreibt …"
+            await self.perform { partial in try await work(src.text, src.context, partial) }
         }
     }
 
-    func retryAI() { lastAIAction?() }
+    /// Einfache KI-Ausführung ohne Quelltext (Schreiben, Makros, Verfeinern).
+    func runAI(title: String, original: String, target: ReplaceTarget, showDiff: Bool,
+               _ work: @escaping (@escaping (String) -> Void) async throws -> String) {
+        guard requireAI() else { return }
+        aiTask?.cancel()
+        aiTitle = title
+        aiResult = ""
+        aiOriginal = original
+        aiError = nil
+        aiBusy = true
+        aiStatus = "KI schreibt …"
+        aiShowDiff = showDiff
+        replaceTarget = target
+        composeMode = false
+        panel = .result
+        store.incrementStat("aiActions")
+        lastRun = { [weak self] in self?.runAI(title: title, original: original, target: target, showDiff: showDiff, work) }
+        aiTask = Task { @MainActor [weak self] in
+            await self?.perform(work)
+        }
+    }
 
-    func startCompose() {
+    @MainActor
+    private func perform(_ work: @escaping (@escaping (String) -> Void) async throws -> String) async {
+        do {
+            let result = try await work { [weak self] partial in
+                DispatchQueue.main.async {
+                    guard let self, self.aiBusy else { return }
+                    self.aiResult = OpenAIClient.cleanup(partial)
+                }
+            }
+            guard !Task.isCancelled else { return }
+            aiResult = result
+            aiBusy = false
+            feedback(.medium)
+        } catch {
+            guard !Task.isCancelled else { return }
+            aiError = error.localizedDescription
+            aiBusy = false
+        }
+    }
+
+    func cancelAI() {
+        aiTask?.cancel()
+        aiBusy = false
+    }
+
+    func retryAI() { lastRun?() }
+
+    /// Verfeinert das aktuelle Ergebnis.
+    func refine(_ instruction: String) {
+        let base = aiResult
+        guard !base.isEmpty else { return }
+        let target = replaceTarget
+        let original = aiOriginal
+        runAI(title: "Verfeinert", original: original, target: target, showDiff: false) { [client = self.client] partial in
+            try await client.transform(text: base, instruction: instruction, onPartial: partial)
+        }
+    }
+
+    func startCompose(refine: Bool = false) {
         guard requireAI() else { return }
         composeText = ""
+        composeIsRefine = refine
         composeMode = true
-        panel = .none
+        if !refine { panel = .none } else { panel = .none }
         layer = .letters
         shift = .on
+        updateReturnKey()
     }
 
     func cancelCompose() {
         composeMode = false
         composeText = ""
+        updateReturnKey()
+        if composeIsRefine, !aiResult.isEmpty { panel = .result }
+        composeIsRefine = false
         updateAutoShift()
-        refreshSuggestions()
+        scheduleRefresh()
     }
 
     func sendCompose() {
         let prompt = composeText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { cancelCompose(); return }
+        let isRefine = composeIsRefine
         composeMode = false
+        composeIsRefine = false
         composeText = ""
-        let context = store.useAppContext ? before + after : nil
-        runAI(title: "„\(prompt.prefix(30))“", replace: .none) { [client = self.client] in
-            try await client.compose(prompt: prompt, context: context)
+        updateReturnKey()
+        if isRefine {
+            refine(prompt)
+            return
+        }
+        let context = store.useAppContext ? String((before + after).suffix(8000)) : nil
+        runAI(title: "„\(prompt.prefix(30))“", original: "", target: .none, showDiff: false) { [client = self.client] partial in
+            try await client.compose(prompt: prompt, context: context, onPartial: partial)
         }
     }
 
     /// Ergebnis anwenden.
     func applyResult(replace: Bool) {
         let result = aiResult
-        guard !result.isEmpty, let proxy else { return }
+        guard !result.isEmpty, !aiBusy else { return }
         feedback(.medium)
-        if replace {
-            switch replaceTarget {
-            case .selection:
-                proxy.insertText(result)
-            case .all(let b, let a), .range(let b, let a):
-                if a > 0 { proxy.adjustTextPosition(byCharacterOffset: a) }
-                let total = b + a
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-                    self?.deleteChars(total)
-                    self?.proxy?.insertText(result)
-                    self?.afterCommit()
-                }
-            case .none:
-                proxy.insertText(result)
-            }
-        } else {
-            var text = result
-            if let last = before.last, !last.isWhitespace { text = " " + text }
-            proxy.insertText(text)
-        }
+        let target = replaceTarget
         panel = .none
-        aiResult = ""
-        afterCommit()
+        Task { @MainActor [weak self] in
+            guard let self, let proxy = self.proxy else { return }
+            if replace {
+                switch target {
+                case .selection, .none:
+                    proxy.insertText(result)
+                case .all(let length):
+                    await self.replaceAll(with: result, expectedLength: length)
+                case .range(let b, let a):
+                    if a > 0 {
+                        let old = proxy.documentContextBeforeInput
+                        let tail = String(self.after.prefix(a))
+                        proxy.adjustTextPosition(byCharacterOffset: tail.utf16.count)
+                        await self.waitForContextChange(from: old)
+                    }
+                    self.deleteChars(b + a)
+                    proxy.insertText(result)
+                }
+            } else {
+                var text = result
+                if let last = self.before.last, !last.isWhitespace { text = (result.contains("\n") ? "\n\n" : " ") + text }
+                proxy.insertText(text)
+            }
+            self.aiResult = ""
+            self.afterCommit()
+        }
+    }
+
+    @MainActor
+    private func replaceAll(with text: String, expectedLength: Int) async {
+        await moveToEnd()
+        var deleted = 0
+        let limit = expectedLength + 20
+        while deleted < limit {
+            let b = before
+            if b.isEmpty { break }
+            let n = min(b.count, limit - deleted)
+            for _ in 0..<n { proxy?.deleteBackward() }
+            deleted += n
+            await waitForContextChange(from: b)
+        }
+        proxy?.insertText(text)
     }
 
     func copyResult() {
-        guard hasFullAccess else { return }
+        guard hasFullAccess, !aiResult.isEmpty else { return }
         UIPasteboard.general.string = aiResult
-        store.addClip(aiResult)
+        clips = store.addClip(aiResult)
+        lastChangeCount = UIPasteboard.general.changeCount
         showToast("Kopiert ✓")
     }
 
@@ -715,6 +863,16 @@ final class KeyboardState: ObservableObject {
         clips = items
     }
 
+    /// KI-Aktion direkt auf einen Ablage-Eintrag.
+    func summarizeClip(_ item: ClipItem) {
+        guard requireAI() else { return }
+        let text = item.text
+        let prompt = AIAction.defaults.first(where: { $0.category == .summary })?.prompt ?? "Fasse den Text zusammen."
+        runAI(title: "Ablage zusammenfassen", original: text, target: .none, showDiff: false) { [client = self.client] partial in
+            try await client.transform(text: text, instruction: prompt, onPartial: partial)
+        }
+    }
+
     func pasteCurrent() {
         guard hasFullAccess, let s = UIPasteboard.general.string else {
             showToast("Zwischenablage leer oder kein voller Zugriff.")
@@ -726,119 +884,15 @@ final class KeyboardState: ObservableObject {
 
     func copyAll() {
         guard hasFullAccess else { return }
-        let t = selected.isEmpty ? before + after : selected
-        guard !t.isEmpty else { return }
-        UIPasteboard.general.string = t
-        clips = store.addClip(t)
-        showToast("Kopiert ✓")
-    }
-
-    // MARK: - Diktat
-
-    private var observersSet = false
-
-    private func setupDictationObservers() {
-        guard !observersSet else { return }
-        observersSet = true
-        let n = DarwinNotifier.shared
-        n.observe(.pong) { [weak self] in self?.gotPong = true }
-        n.observe(.recording) { [weak self] in self?.pollDictation() }
-        n.observe(.processing) { [weak self] in self?.pollDictation() }
-        n.observe(.result) { [weak self] in self?.pollDictation() }
-        n.observe(.failed) { [weak self] in self?.pollDictation() }
-        n.observe(.sessionEnded) { [weak self] in
-            guard let self, self.panel == .dictation, self.dictation == .recording else { return }
-            self.dictation = .failed("Diktat-Sitzung wurde beendet.")
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let t = self.selected.isEmpty ? await self.readFullText() : self.selected
+            guard !t.isEmpty else { return }
+            UIPasteboard.general.string = t
+            self.clips = self.store.addClip(t)
+            self.lastChangeCount = UIPasteboard.general.changeCount
+            self.showToast("\(t.wordCount) Wörter kopiert ✓")
         }
-    }
-
-    func startDictation() {
-        feedback(.medium)
-        guard hasFullAccess else {
-            showToast("Für Diktat bitte „Vollen Zugriff“ erlauben.")
-            return
-        }
-        guard store.hasAPIKey else {
-            showToast("Kein API-Schlüssel – öffne die App Tastatur KI.")
-            return
-        }
-        composeMode = false
-        panel = .dictation
-        dictation = .connecting
-        lastHandledStatus = DictationFiles.read(DictationFiles.status) ?? ""
-        gotPong = false
-        dictationStartedAt = Date()
-        DarwinNotifier.shared.post(.ping)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
-            guard let self, self.panel == .dictation, self.dictation == .connecting else { return }
-            if self.gotPong {
-                DarwinNotifier.shared.post(.start)
-            } else {
-                self.dictation = .openingApp
-                if let url = URL(string: "tastatur://dictate") { self.controller?.openURL(url) }
-            }
-        }
-        startDictationTimer()
-    }
-
-    private func resumeDictationCheck() {
-        gotPong = false
-        DarwinNotifier.shared.post(.ping)
-        startDictationTimer()
-        pollDictation()
-    }
-
-    private func startDictationTimer() {
-        dictationTimer?.invalidate()
-        dictationTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self] _ in
-            self?.pollDictation()
-        }
-    }
-
-    private func pollDictation() {
-        guard panel == .dictation else {
-            dictationTimer?.invalidate()
-            return
-        }
-        let status = DictationFiles.read(DictationFiles.status) ?? ""
-        if status == "recording" {
-            if dictation != .recording { dictation = .recording; feedback(.medium) }
-            if let l = DictationFiles.read(DictationFiles.level), let v = Float(l) { dictationLevel = v }
-        } else if status == "processing" {
-            dictation = .processing
-        } else if status.hasPrefix("done:"), status != lastHandledStatus {
-            lastHandledStatus = status
-            let text = DictationFiles.read(DictationFiles.result) ?? ""
-            finishDictation(with: text)
-        } else if status.hasPrefix("failed:"), status != lastHandledStatus {
-            lastHandledStatus = status
-            dictation = .failed(DictationFiles.read(DictationFiles.error) ?? "Unbekannter Fehler")
-        } else if dictation == .connecting, Date().timeIntervalSince(dictationStartedAt) > 3 {
-            dictation = .openingApp
-        }
-    }
-
-    private func finishDictation(with text: String) {
-        dictationTimer?.invalidate()
-        panel = .none
-        guard !text.isEmpty else { return }
-        var t = text
-        if let last = before.last, !last.isWhitespace, !last.isNewline { t = " " + t }
-        proxy?.insertText(t)
-        feedback(.medium)
-        afterCommit()
-    }
-
-    func stopDictation() {
-        feedback(.medium)
-        DarwinNotifier.shared.post(.stop)
-        dictation = .processing
-    }
-
-    func cancelDictation() {
-        DarwinNotifier.shared.post(.cancel)
-        dictationTimer?.invalidate()
-        panel = .none
     }
 
     func openApp(_ path: String = "") {
@@ -850,9 +904,10 @@ final class KeyboardState: ObservableObject {
     func toggle(_ p: Panel) {
         feedback()
         if composeMode { cancelCompose() }
+        if panel == .result, p == .result, aiBusy { cancelAI() }
         panel = panel == p ? .none : p
         if panel == .clipboard { reloadClips() }
-        if panel == .none { refreshSuggestions() }
+        if panel == .none { refreshSuggestionsNow() }
     }
 
     func setProfile(_ id: String) {
@@ -870,7 +925,6 @@ final class KeyboardState: ObservableObject {
     }
 
     func setLayer(_ l: KeyboardLayer) {
-        feedback()
         layer = l
         onHeightChange?(totalHeight)
     }

@@ -3,19 +3,21 @@ import UIKit
 
 struct HomeView: View {
     @EnvironmentObject var store: SharedStore
-    @EnvironmentObject var dictation: DictationService
-    @State private var testText = ""
     @State private var showSetup = false
-    @FocusState private var testFocused: Bool
 
     var body: some View {
         ScrollView {
             VStack(spacing: 18) {
                 hero
                 if !store.hasAPIKey { apiKeyHint }
-                sessionCard
-                inAppDictation
-                playground
+                NavigationLink { WorkshopView() } label: {
+                    GlassCard(tint: Theme.tint(store.keyboardTint).opacity(0.35)) {
+                        CardHeader(title: "KI-Werkstatt", symbol: "wand.and.stars.inverse",
+                                   subtitle: "Lange Texte einfügen und zusammenfassen, korrigieren, übersetzen – ohne Längenlimit.")
+                    }
+                }
+                .buttonStyle(.plain)
+                tipsCard
                 setupCard
                 statsCard
             }
@@ -25,7 +27,6 @@ struct HomeView: View {
         .glassBackground()
         .navigationTitle("Tastatur KI")
         .sheet(isPresented: $showSetup) { SetupGuideView() }
-        .scrollDismissesKeyboard(.interactively)
     }
 
     private var hero: some View {
@@ -34,7 +35,7 @@ struct HomeView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Deine KI-Tastatur")
                         .font(.title2.bold())
-                    Text("Autokorrektur, Vorschläge, Makros, Zwischenablage, Diktat und ChatGPT – direkt beim Tippen.")
+                    Text("Autokorrektur, Vorschläge, Makros, Zwischenablage und ChatGPT – direkt beim Tippen.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -47,6 +48,9 @@ struct HomeView: View {
                 StatusPill(ok: store.hasAPIKey, text: store.hasAPIKey ? "API verbunden" : "Kein API-Schlüssel")
                 StatusPill(ok: store.usesAppGroup, text: store.usesAppGroup ? "Sync aktiv" : "Sync eingeschränkt")
             }
+            Text("Modell: \(store.chatModel)")
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -55,114 +59,28 @@ struct HomeView: View {
             APIKeyView()
         } label: {
             GlassCard(tint: .orange) {
-                CardHeader(title: "API-Schlüssel hinterlegen", symbol: "key.fill", subtitle: "Für KI-Funktionen und Diktat brauchst du einen OpenAI-Schlüssel.")
+                CardHeader(title: "API-Schlüssel hinterlegen", symbol: "key.fill", subtitle: "Für alle KI-Funktionen brauchst du einen OpenAI-Schlüssel.")
             }
         }
         .buttonStyle(.plain)
     }
 
-    private var sessionCard: some View {
+    private var tipsCard: some View {
         GlassCard {
-            CardHeader(title: "Diktat-Sitzung", symbol: dictation.sessionActive ? "waveform.circle.fill" : "waveform.circle",
-                       subtitle: dictation.sessionActive ? "Aktiv – du kannst in der Tastatur auf 🎙 tippen." : "Startet die Hintergrund-Aufnahme für die Tastatur.")
-            if dictation.sessionActive, let end = dictation.sessionEndsAt {
-                HStack {
-                    Image(systemName: "timer")
-                    Text("Endet automatisch ") + Text(end, style: .relative)
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-            stateView
-            if dictation.sessionActive {
-                GlassButton(title: "Sitzung beenden", symbol: "stop.fill") { dictation.endSession() }
-            } else {
-                GlassButton(title: "Sitzung starten", symbol: "mic.fill", prominent: true) {
-                    Task { await dictation.startKeyboardSession(recordImmediately: false) }
-                }
-            }
-            Text("Tipp: Wenn du in der Tastatur auf das Mikrofon tippst, öffnet sich diese App kurz. Wische danach über „◀︎ Zurück“ oben links in deine App zurück – die Aufnahme läuft dann im Hintergrund.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            CardHeader(title: "So holst du alles raus", symbol: "lightbulb")
+            tip("sparkles", "Tippe in der Tastatur auf ✨ für KI, Ablage, Makros und Emojis.")
+            tip("wand.and.stars", "Der Zauberstab rechts öffnet direkt die KI-Aktionen.")
+            tip("character.cursor.ibeam", "Markiere Text, damit die KI nur diesen bearbeitet – sonst wird der ganze Text im Feld genutzt.")
+            tip("doc.on.clipboard", "Riesige Texte (z. B. Artikel, Mails): kopieren und in der Tastatur „Quelle: Zwischenablage“ wählen.")
+            tip("arrow.left.and.right", "Wische über die Leertaste, um den Cursor zu bewegen.")
+            tip("hand.point.up.left", "Halte Buchstaben gedrückt für Umlaute und Akzente (s → ß).")
         }
     }
 
-    @ViewBuilder
-    private var stateView: some View {
-        switch dictation.state {
-        case .recording:
-            HStack {
-                LevelMeter(level: dictation.level)
-                Text("Aufnahme läuft…").font(.subheadline.weight(.medium))
-            }
-        case .processing:
-            HStack { ProgressView(); Text("Wird transkribiert…").font(.subheadline) }
-        case .failed(let msg):
-            Label(msg, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange)
-        default:
-            EmptyView()
-        }
-    }
-
-    private var inAppDictation: some View {
-        GlassCard {
-            CardHeader(title: "Schnell-Diktat", symbol: "mic.badge.plus", subtitle: "Direkt hier sprechen – Text landet in der Zwischenablage.")
-            HStack(spacing: 16) {
-                Button {
-                    Task { await dictation.toggleInAppRecording() }
-                } label: {
-                    Image(systemName: dictation.isRecording ? "stop.fill" : "mic.fill")
-                        .font(.system(size: 28, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 72, height: 72)
-                        .glass(cornerRadius: 36, tint: dictation.isRecording ? .red : .accentColor, interactive: true)
-                }
-                .buttonStyle(.plain)
-                VStack(alignment: .leading) {
-                    if dictation.isRecording {
-                        LevelMeter(level: dictation.level)
-                        Text("Tippe zum Beenden").font(.caption).foregroundStyle(.secondary)
-                    } else if case .processing = dictation.state {
-                        ProgressView()
-                    } else {
-                        Text(dictation.lastTranscript.isEmpty ? "Noch kein Diktat" : dictation.lastTranscript)
-                            .font(.subheadline)
-                            .lineLimit(4)
-                    }
-                }
-                Spacer(minLength: 0)
-            }
-            if !dictation.lastTranscript.isEmpty, !dictation.isRecording {
-                HStack {
-                    GlassButton(title: "Kopieren", symbol: "doc.on.doc") {
-                        UIPasteboard.general.string = dictation.lastTranscript
-                        store.addClip(dictation.lastTranscript)
-                    }
-                    GlassButton(title: "Ins Testfeld", symbol: "arrow.down.doc") {
-                        testText += (testText.isEmpty ? "" : " ") + dictation.lastTranscript
-                    }
-                }
-            }
-        }
-        .onChange(of: dictation.state) { _, newValue in
-            if case .done(let text) = newValue, !dictation.sessionActive {
-                UIPasteboard.general.string = text
-                store.addClip(text)
-            }
-        }
-    }
-
-    private var playground: some View {
-        GlassCard {
-            CardHeader(title: "Testfeld", symbol: "character.cursor.ibeam", subtitle: "Wechsle mit 🌐 zur Tastatur KI und probiere alles aus.")
-            TextField("Hier tippen…", text: $testText, axis: .vertical)
-                .lineLimit(4...10)
-                .focused($testFocused)
-                .padding(12)
-                .glass(cornerRadius: 14)
-            if !testText.isEmpty {
-                Button("Leeren", role: .destructive) { testText = "" }.font(.caption)
-            }
+    private func tip(_ symbol: String, _ text: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: symbol).foregroundStyle(.tint).frame(width: 22)
+            Text(text).font(.subheadline)
         }
     }
 
@@ -181,7 +99,6 @@ struct HomeView: View {
             CardHeader(title: "Statistik", symbol: "chart.bar.xaxis")
             HStack {
                 stat("\(store.stat("aiActions"))", "KI-Aktionen")
-                stat("\(store.stat("dictations"))", "Diktate")
                 stat("\(store.stat("macros"))", "Makros")
                 stat("\(store.stat("corrections"))", "Korrekturen")
             }
@@ -197,21 +114,148 @@ struct HomeView: View {
     }
 }
 
-struct LevelMeter: View {
-    var level: Float
-    var bars = 14
+/// In der App: beliebig lange Texte mit KI bearbeiten.
+struct WorkshopView: View {
+    @EnvironmentObject var store: SharedStore
+    @State private var input = ""
+    @State private var output = ""
+    @State private var original = ""
+    @State private var busy = false
+    @State private var error: String?
+    @State private var showDiff = false
+    @State private var task: Task<Void, Never>?
+    @State private var customPrompt = ""
 
     var body: some View {
-        HStack(spacing: 3) {
-            ForEach(0..<bars, id: \.self) { i in
-                let falloff = 1 - abs(Double(i) - Double(bars) / 2) / Double(bars)
-                Capsule()
-                    .fill(.tint)
-                    .frame(width: 4, height: max(4, CGFloat(Double(level) * 40 * falloff)))
+        ScrollView {
+            VStack(spacing: 16) {
+                GlassCard {
+                    HStack {
+                        CardHeader(title: "Dein Text", symbol: "doc.plaintext", subtitle: "\(input.wordCount) Wörter · \(input.count) Zeichen")
+                    }
+                    TextField("Text hier einfügen oder tippen …", text: $input, axis: .vertical)
+                        .lineLimit(6...16)
+                        .padding(12)
+                        .glass(cornerRadius: 14)
+                    HStack {
+                        GlassButton(title: "Einfügen", symbol: "doc.on.clipboard") {
+                            if let s = UIPasteboard.general.string { input = s }
+                        }
+                        GlassButton(title: "Leeren", symbol: "trash") { input = ""; output = "" }
+                    }
+                }
+
+                ForEach([ActionCategory.summary, .edit, .tone, .translate, .custom]) { cat in
+                    let items = store.actions.filter { $0.enabled && $0.category == cat }
+                    if !items.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(cat.label).font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.leading, 4)
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    ForEach(items) { action in
+                                        Button { run(action.prompt, diff: action.showDiff) } label: {
+                                            Label(action.title, systemImage: action.symbol)
+                                                .font(.subheadline.weight(.semibold))
+                                                .padding(.horizontal, 14)
+                                                .frame(height: 40)
+                                                .glassCapsule(interactive: true)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .disabled(busy)
+                                    }
+                                }
+                                .padding(.horizontal, 2)
+                            }
+                        }
+                    }
+                }
+
+                GlassCard {
+                    CardHeader(title: "Eigene Anweisung", symbol: "text.bubble")
+                    HStack {
+                        TextField("z. B. Schreib daraus eine LinkedIn-Post", text: $customPrompt)
+                            .padding(10)
+                            .glass(cornerRadius: 12)
+                        Button { run(customPrompt, diff: false) } label: {
+                            Image(systemName: "arrow.up.circle.fill").font(.title)
+                        }
+                        .disabled(customPrompt.isEmpty || busy)
+                    }
+                }
+
+                if busy || !output.isEmpty || error != nil {
+                    GlassCard(tint: Theme.tint(store.keyboardTint).opacity(0.2)) {
+                        HStack {
+                            CardHeader(title: "Ergebnis", symbol: "sparkles", subtitle: output.isEmpty ? nil : "\(output.wordCount) Wörter")
+                            if busy {
+                                Button("Stopp") { task?.cancel(); busy = false }.buttonStyle(.bordered)
+                            }
+                        }
+                        if let error {
+                            Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.subheadline)
+                        }
+                        if showDiff, !busy, let segs = TextDiff.segments(original: original, revised: output) {
+                            diffText(segs).textSelection(.enabled)
+                        } else {
+                            Text(output.isEmpty ? "…" : output).textSelection(.enabled)
+                        }
+                        if !busy && !output.isEmpty {
+                            HStack {
+                                GlassButton(title: "Kopieren", symbol: "doc.on.doc", prominent: true) {
+                                    UIPasteboard.general.string = output
+                                    store.addClip(output)
+                                }
+                                GlassButton(title: "Übernehmen", symbol: "arrow.up.doc") {
+                                    input = output
+                                    output = ""
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(16)
+        }
+        .glassBackground()
+        .navigationTitle("KI-Werkstatt")
+        .scrollDismissesKeyboard(.interactively)
+    }
+
+    private func diffText(_ segs: [TextDiff.Segment]) -> Text {
+        var attr = AttributedString()
+        for s in segs {
+            var part = AttributedString(s.text)
+            if s.changed {
+                part.swiftUI.foregroundColor = .green
+                part.swiftUI.font = .body.bold()
+            }
+            attr += part
+        }
+        return Text(attr)
+    }
+
+    private func run(_ instruction: String, diff: Bool) {
+        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { error = "Füge zuerst einen Text ein."; return }
+        busy = true
+        error = nil
+        output = ""
+        original = text
+        showDiff = diff
+        store.incrementStat("aiActions")
+        task = Task {
+            do {
+                let result = try await OpenAIClient().transform(text: text, instruction: instruction) { partial in
+                    Task { @MainActor in output = partial }
+                }
+                await MainActor.run { output = result; busy = false }
+            } catch {
+                await MainActor.run {
+                    if !(error is CancellationError) { self.error = error.localizedDescription }
+                    busy = false
+                }
             }
         }
-        .frame(height: 40)
-        .animation(.easeOut(duration: 0.1), value: level)
     }
 }
 
@@ -221,10 +265,9 @@ struct SetupGuideView: View {
     private let steps: [(String, String, String)] = [
         ("1", "gear", "Öffne die iOS-Einstellungen → Allgemein → Tastatur → Tastaturen."),
         ("2", "plus.circle", "Tippe auf „Tastatur hinzufügen…“ und wähle „Tastatur KI“."),
-        ("3", "lock.open", "Tippe auf „Tastatur KI“ und aktiviere „Vollen Zugriff erlauben“. Nötig für KI, Zwischenablage und Diktat. Dein Text geht nur an OpenAI – mit deinem eigenen Schlüssel."),
+        ("3", "lock.open", "Tippe auf „Tastatur KI“ und aktiviere „Vollen Zugriff erlauben“. Nötig für KI und Zwischenablage. Dein Text geht nur an OpenAI – mit deinem eigenen Schlüssel."),
         ("4", "key", "Trage in dieser App unter „KI“ deinen OpenAI-API-Schlüssel ein."),
         ("5", "globe", "Halte in einer beliebigen App die 🌐-Taste gedrückt und wähle „Tastatur KI“."),
-        ("6", "mic", "Für Diktat: Tippe in der Tastatur auf das Mikrofon. Die App öffnet sich einmalig für die Diktat-Sitzung – danach oben links zurück wischen und lossprechen."),
     ]
 
     var body: some View {

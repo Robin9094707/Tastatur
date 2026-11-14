@@ -19,6 +19,7 @@ struct SettingsView: View {
             Section("Gefühl") {
                 Toggle(isOn: $store.haptics) { Label("Haptisches Feedback", systemImage: "hand.tap") }
                 Toggle(isOn: $store.keySound) { Label("Tastenklick", systemImage: "speaker.wave.2") }
+                Toggle(isOn: $store.keyPopups) { Label("Tasten-Vorschau beim Tippen", systemImage: "rectangle.on.rectangle") }
             }
             .glassRow()
 

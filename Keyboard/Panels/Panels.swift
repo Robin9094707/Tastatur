@@ -6,63 +6,81 @@ struct AIPanel: View {
     @ObservedObject var state: KeyboardState
     @ObservedObject var store = SharedStore.shared
 
-    private let columns = [GridItem(.adaptive(minimum: 104), spacing: 8)]
-
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
                 if !state.hasFullAccess || !store.hasAPIKey {
                     MissingSetupBanner(state: state)
                 }
-                Button { state.startCompose() } label: {
-                    HStack {
-                        Image(systemName: "pencil.line")
-                        Text("KI schreiben lassen …")
-                        Spacer()
-                        Image(systemName: "arrow.right")
+                sourcePicker
+                ForEach([ActionCategory.summary, .edit, .tone, .translate, .custom]) { cat in
+                    let items = store.actions.filter { $0.enabled && $0.category == cat }
+                    if !items.isEmpty {
+                        section(cat, items)
                     }
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 14)
-                    .frame(height: 42)
-                    .glass(cornerRadius: 14, tint: state.tint.opacity(0.5), interactive: true)
                 }
-                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+        }
+    }
 
-                GlassGroup(spacing: 8) {
-                    LazyVGrid(columns: columns, spacing: 8) {
-                        ForEach(store.actions.filter(\.enabled)) { action in
+    private var sourcePicker: some View {
+        HStack(spacing: 6) {
+            Text("Quelle").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            sourceChip("Feld", "text.cursor", .auto)
+            sourceChip("Absatz", "paragraphsign", .paragraph)
+            sourceChip("Ablage", "doc.on.clipboard", .clipboard)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func sourceChip(_ title: String, _ symbol: String, _ mode: AIScope) -> some View {
+        let selected = state.sourceMode == mode
+        return Button {
+            state.sourceMode = mode
+            state.feedback()
+        } label: {
+            Label(title, systemImage: symbol)
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+                .foregroundStyle(selected ? Color.white : Color.primary)
+                .glassCapsule(tint: selected ? state.tint : nil, interactive: true)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func section(_ cat: ActionCategory, _ items: [AIAction]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(cat.label.uppercased())
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 4)
+            ScrollView(.horizontal, showsIndicators: false) {
+                GlassGroup(spacing: 6) {
+                    HStack(spacing: 6) {
+                        ForEach(items) { action in
                             Button { state.runAction(action) } label: {
-                                VStack(spacing: 4) {
+                                HStack(spacing: 6) {
                                     Image(systemName: action.symbol)
-                                        .font(.system(size: 17, weight: .semibold))
-                                        .foregroundStyle(state.tint)
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .foregroundStyle(cat == .summary ? Color.white : state.tint)
                                     Text(action.title)
-                                        .font(.caption.weight(.semibold))
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(cat == .summary ? Color.white : Color.primary)
                                         .lineLimit(1)
-                                        .minimumScaleFactor(0.7)
                                 }
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 54)
-                                .glass(cornerRadius: 14, interactive: true)
+                                .padding(.horizontal, 13)
+                                .frame(height: 40)
+                                .glass(cornerRadius: 14, tint: cat == .summary ? state.tint.opacity(0.85) : nil, interactive: true)
                             }
                             .buttonStyle(.plain)
                         }
                     }
+                    .padding(.horizontal, 2)
                 }
-                Text("Wirkt auf: \(scopeHint)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
             }
-            .padding(10)
-        }
-    }
-
-    private var scopeHint: String {
-        if !state.selected.isEmpty { return "markierten Text" }
-        switch store.aiScope {
-        case .auto, .all: return "gesamten Text im Feld (markiere Text, um nur diesen zu ändern)"
-        case .sentence: return "aktuellen Absatz"
-        case .selection: return "nur markierten Text"
         }
     }
 }
@@ -95,64 +113,158 @@ struct MissingSetupBanner: View {
 struct ResultPanel: View {
     @ObservedObject var state: KeyboardState
     @State private var shimmer = false
+    @State private var diffMode = true
 
     var body: some View {
-        VStack(spacing: 8) {
-            Group {
-                if state.aiBusy {
-                    VStack(spacing: 10) {
-                        ForEach(0..<4, id: \.self) { i in
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(state.tint.opacity(shimmer ? 0.35 : 0.12))
-                                .frame(height: 12)
-                                .frame(maxWidth: i == 3 ? 160 : .infinity, alignment: .leading)
-                        }
-                        Text("KI denkt nach …").font(.caption).foregroundStyle(.secondary)
+        VStack(spacing: 6) {
+            resultCard
+            if !state.aiBusy, !state.aiResult.isEmpty {
+                refineStrip
+            }
+            actionRow
+        }
+        .padding(.horizontal, 8)
+        .padding(.bottom, 6)
+        .padding(.top, 2)
+    }
+
+    private var resultCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let error = state.aiError {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                    if error.contains("Schlüssel") {
+                        Button("Schlüssel aus Zwischenablage einfügen") { state.pasteAPIKey() }
+                            .buttonStyle(.bordered)
+                            .font(.caption)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .onAppear {
-                        withAnimation(.easeInOut(duration: 0.8).repeatForever()) { shimmer = true }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else if state.aiResult.isEmpty {
+                VStack(alignment: .leading, spacing: 9) {
+                    ForEach(0..<4, id: \.self) { i in
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(state.tint.opacity(shimmer ? 0.38 : 0.12))
+                            .frame(height: 11)
+                            .frame(maxWidth: i == 3 ? 150 : .infinity, alignment: .leading)
                     }
-                } else if let error = state.aiError {
-                    VStack(spacing: 8) {
-                        Label(error, systemImage: "exclamationmark.triangle.fill")
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
-                        if error.contains("Schlüssel") {
-                            Button("Schlüssel aus Zwischenablage einfügen") { state.pasteAPIKey() }
-                                .buttonStyle(.bordered)
-                                .font(.caption)
-                        }
-                    }
-                } else {
+                    Text(state.aiStatus).font(.caption).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .onAppear {
+                    withAnimation(.easeInOut(duration: 0.7).repeatForever()) { shimmer = true }
+                }
+            } else {
+                ScrollViewReader { reader in
                     ScrollView {
-                        Text(state.aiResult)
+                        resultText
                             .font(.system(size: 15))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .textSelection(.enabled)
+                        Color.clear.frame(height: 1).id("end")
+                    }
+                    .onChange(of: state.aiResult) { _, _ in
+                        if state.aiBusy { reader.scrollTo("end", anchor: .bottom) }
                     }
                 }
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .glass(cornerRadius: 16)
-
-            GlassGroup(spacing: 6) {
-                HStack(spacing: 6) {
-                    actionButton("Ersetzen", "arrow.2.squarepath", prominent: true) { state.applyResult(replace: true) }
-                        .disabled(state.aiBusy || state.aiResult.isEmpty)
-                    actionButton("Einfügen", "text.insert", prominent: false) { state.applyResult(replace: false) }
-                        .disabled(state.aiBusy || state.aiResult.isEmpty)
-                    actionButton("", "doc.on.doc", prominent: false) { state.copyResult() }
-                        .disabled(state.aiBusy || state.aiResult.isEmpty)
-                        .frame(width: 50)
-                    actionButton("", "arrow.clockwise", prominent: false) { state.retryAI() }
-                        .disabled(state.aiBusy)
-                        .frame(width: 50)
-                }
+                statsLine
             }
         }
-        .padding(8)
+        .padding(10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .glass(cornerRadius: 16)
+    }
+
+    private var resultText: Text {
+        if state.aiShowDiff, diffMode, !state.aiBusy, !state.aiOriginal.isEmpty,
+           let segs = TextDiff.segments(original: state.aiOriginal, revised: state.aiResult) {
+            var attr = AttributedString()
+            for s in segs {
+                var part = AttributedString(s.text)
+                if s.changed {
+                    part.swiftUI.foregroundColor = state.tint
+                    part.swiftUI.font = .system(size: 15, weight: .bold)
+                }
+                attr += part
+            }
+            return Text(attr)
+        }
+        return Text(state.aiResult)
+    }
+
+    @ViewBuilder
+    private var statsLine: some View {
+        if !state.aiBusy {
+            HStack(spacing: 8) {
+                if !state.aiOriginal.isEmpty {
+                    Text("\(state.aiOriginal.wordCount) → \(state.aiResult.wordCount) Wörter")
+                }
+                if state.aiShowDiff, !state.aiOriginal.isEmpty {
+                    let changes = TextDiff.changeCount(original: state.aiOriginal, revised: state.aiResult)
+                    Text(changes == 0 ? "✓ Keine Fehler gefunden" : "\(changes) Änderungen markiert")
+                    Spacer()
+                    Button(diffMode ? "Markierung aus" : "Markierung an") { diffMode.toggle() }
+                } else {
+                    Spacer()
+                }
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private var refineStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                Button { state.startCompose(refine: true) } label: {
+                    Label("Anpassen …", systemImage: "slider.horizontal.3")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10)
+                        .frame(height: 30)
+                        .glassCapsule(tint: state.tint.opacity(0.35), interactive: true)
+                }
+                .buttonStyle(.plain)
+                ForEach(AIAction.refinements, id: \.title) { r in
+                    Button { state.refine(r.prompt) } label: {
+                        Text(r.title)
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .frame(height: 30)
+                            .glassCapsule(interactive: true)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 2)
+        }
+        .frame(height: 32)
+    }
+
+    private var actionRow: some View {
+        GlassGroup(spacing: 6) {
+            HStack(spacing: 6) {
+                let canApply = !state.aiBusy && !state.aiResult.isEmpty
+                if replaceAvailable {
+                    actionButton("Ersetzen", "arrow.2.squarepath", prominent: true) { state.applyResult(replace: true) }
+                        .disabled(!canApply)
+                }
+                actionButton("Einfügen", "text.insert", prominent: !replaceAvailable) { state.applyResult(replace: false) }
+                    .disabled(!canApply)
+                actionButton("", "doc.on.doc", prominent: false) { state.copyResult() }
+                    .disabled(!canApply)
+                    .frame(width: 48)
+                actionButton("", "arrow.clockwise", prominent: false) { state.retryAI() }
+                    .disabled(state.aiBusy)
+                    .frame(width: 48)
+            }
+        }
+    }
+
+    private var replaceAvailable: Bool {
+        if case .none = state.replaceTarget { return false }
+        return true
     }
 
     private func actionButton(_ title: String, _ symbol: String, prominent: Bool, action: @escaping () -> Void) -> some View {
@@ -164,7 +276,7 @@ struct ResultPanel: View {
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(prominent ? Color.white : Color.primary)
             .frame(maxWidth: .infinity)
-            .frame(height: 44)
+            .frame(height: 42)
             .glass(cornerRadius: 14, tint: prominent ? state.tint : nil, interactive: true)
         }
         .buttonStyle(.plain)
@@ -179,8 +291,10 @@ struct ClipboardPanel: View {
     var body: some View {
         Group {
             if !state.hasFullAccess {
-                MissingSetupBanner(state: state).padding(10)
-                Spacer()
+                VStack {
+                    MissingSetupBanner(state: state).padding(10)
+                    Spacer()
+                }
             } else if state.clips.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "doc.on.clipboard").font(.largeTitle).foregroundStyle(.secondary)
@@ -191,20 +305,29 @@ struct ClipboardPanel: View {
                 ScrollView {
                     LazyVStack(spacing: 6) {
                         ForEach(state.clips) { item in
-                            HStack(alignment: .top, spacing: 8) {
+                            HStack(alignment: .center, spacing: 10) {
                                 Button { state.pasteClip(item) } label: {
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(item.text)
                                             .font(.system(size: 14))
                                             .lineLimit(2)
                                             .frame(maxWidth: .infinity, alignment: .leading)
-                                        Text(item.date, style: .relative)
-                                            .font(.system(size: 10))
-                                            .foregroundStyle(.secondary)
+                                        HStack(spacing: 4) {
+                                            Text(item.date, style: .relative)
+                                            Text("· \(item.text.wordCount) Wörter")
+                                        }
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(.secondary)
                                     }
                                     .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
+                                if item.text.wordCount > 40 {
+                                    Button { state.summarizeClip(item) } label: {
+                                        Image(systemName: "text.append").foregroundStyle(state.tint)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
                                 Button { state.togglePin(item) } label: {
                                     Image(systemName: item.pinned ? "pin.fill" : "pin")
                                         .foregroundStyle(item.pinned ? Color.yellow : Color.secondary)
@@ -277,8 +400,8 @@ struct EmojiPanel: View {
         VStack(spacing: 0) {
             ScrollView {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 0), count: 8), spacing: 2) {
-                    ForEach(EmojiData.categories[category].emojis, id: \.self) { e in
-                        Button { state.insert(e); state.feedback() } label: {
+                    ForEach(Array(EmojiData.categories[category].emojis.enumerated()), id: \.offset) { _, e in
+                        Button { state.feedback(); state.insert(e) } label: {
                             Text(e).font(.system(size: 28)).frame(height: 40).frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.plain)
@@ -300,7 +423,7 @@ struct EmojiPanel: View {
                     }
                     .buttonStyle(.plain)
                 }
-                Button { state.tapDelete() } label: {
+                Button { state.feedback(); state.tapDelete() } label: {
                     Image(systemName: "delete.left").frame(width: 40, height: 34)
                 }
                 .buttonStyle(.plain)
@@ -310,68 +433,6 @@ struct EmojiPanel: View {
             .padding(.horizontal, 6)
             .padding(.bottom, 4)
         }
-    }
-}
-
-// MARK: - Diktat
-
-struct DictationPanel: View {
-    @ObservedObject var state: KeyboardState
-    @State private var pulse = false
-
-    var body: some View {
-        VStack(spacing: 14) {
-            Spacer(minLength: 0)
-            switch state.dictation {
-            case .connecting:
-                ProgressView()
-                Text("Verbinde mit Tastatur KI …").font(.subheadline)
-            case .openingApp:
-                Image(systemName: "arrow.up.forward.app").font(.system(size: 34)).foregroundStyle(state.tint)
-                Text("Die App startet die Diktat-Sitzung.")
-                    .font(.subheadline.weight(.semibold))
-                Text("Wische danach oben links über „◀︎ Zurück“ hierher – die Aufnahme läuft dann schon.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
-                HStack {
-                    Button("Erneut versuchen") { state.startDictation() }
-                    Button("App öffnen") { state.openApp("dictate") }
-                }
-                .buttonStyle(.bordered)
-                .font(.caption)
-            case .recording:
-                Button { state.stopDictation() } label: {
-                    ZStack {
-                        Circle()
-                            .fill(Color.red.opacity(0.25))
-                            .frame(width: 96 + CGFloat(state.dictationLevel) * 50, height: 96 + CGFloat(state.dictationLevel) * 50)
-                            .animation(.easeOut(duration: 0.12), value: state.dictationLevel)
-                        Image(systemName: "stop.fill")
-                            .font(.system(size: 30, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 80, height: 80)
-                            .glass(cornerRadius: 40, tint: .red, interactive: true)
-                    }
-                }
-                .buttonStyle(.plain)
-                .frame(height: 130)
-                Text("Ich höre zu … tippe zum Beenden").font(.subheadline)
-            case .processing:
-                ProgressView().controlSize(.large)
-                Text("Wird transkribiert …").font(.subheadline)
-            case .failed(let message):
-                Image(systemName: "exclamationmark.triangle.fill").font(.largeTitle).foregroundStyle(.orange)
-                Text(message).font(.footnote).multilineTextAlignment(.center).padding(.horizontal)
-                Button("Erneut versuchen") { state.startDictation() }.buttonStyle(.bordered)
-            }
-            Spacer(minLength: 0)
-            Button("Abbrechen") { state.cancelDictation() }
-                .font(.footnote)
-                .padding(.bottom, 8)
-        }
-        .frame(maxWidth: .infinity)
     }
 }
 
@@ -400,8 +461,10 @@ struct KeyboardSettingsPanel: View {
                     toggle("KI-Vorschläge", "sparkle", $store.aiSuggestions)
                     toggle("Haptik", "hand.tap", $store.haptics)
                     toggle("Klick-Ton", "speaker.wave.2", $store.keySound)
+                    toggle("Tasten-Vorschau", "rectangle.on.rectangle", $store.keyPopups)
                     toggle("Zahlenreihe", "number", $store.showNumberRow)
                     toggle("Makros auto", "bolt", $store.macroAutoExpand)
+                    toggle("Live-Antwort", "text.cursor", $store.streamResponses)
                 }
                 if !store.usesAppGroup || !store.hasAPIKey {
                     Button { state.pasteAPIKey() } label: {
@@ -412,22 +475,13 @@ struct KeyboardSettingsPanel: View {
                     }
                     .buttonStyle(.plain)
                 }
-                HStack {
-                    Button { state.copyAll() } label: {
-                        Label("Text kopieren", systemImage: "doc.on.doc")
-                            .font(.footnote.weight(.semibold))
-                            .frame(maxWidth: .infinity, minHeight: 36)
-                            .glass(cornerRadius: 12, interactive: true)
-                    }
-                    .buttonStyle(.plain)
-                    Button { state.openApp("settings") } label: {
-                        Label("App öffnen", systemImage: "arrow.up.forward.app")
-                            .font(.footnote.weight(.semibold))
-                            .frame(maxWidth: .infinity, minHeight: 36)
-                            .glass(cornerRadius: 12, tint: state.tint.opacity(0.4), interactive: true)
-                    }
-                    .buttonStyle(.plain)
+                Button { state.openApp("settings") } label: {
+                    Label("App öffnen", systemImage: "arrow.up.forward.app")
+                        .font(.footnote.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: 36)
+                        .glass(cornerRadius: 12, tint: state.tint.opacity(0.4), interactive: true)
                 }
+                .buttonStyle(.plain)
             }
             .padding(10)
         }

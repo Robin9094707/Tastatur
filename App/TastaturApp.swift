@@ -4,7 +4,6 @@ import UIKit
 @main
 struct TastaturApp: App {
     @StateObject private var store = SharedStore.shared
-    @StateObject private var dictation = DictationService.shared
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab = 0
 
@@ -12,7 +11,6 @@ struct TastaturApp: App {
         WindowGroup {
             RootView(selectedTab: $selectedTab)
                 .environmentObject(store)
-                .environmentObject(dictation)
                 .preferredColorScheme(.dark)
                 .tint(Theme.tint(store.keyboardTint))
                 .onOpenURL { url in handle(url) }
@@ -28,12 +26,8 @@ struct TastaturApp: App {
     private func handle(_ url: URL) {
         guard url.scheme == "tastatur" else { return }
         switch url.host ?? "" {
-        case "dictate", "diktat":
+        case "werkstatt", "workshop":
             selectedTab = 0
-            Task { await dictation.startKeyboardSession(recordImmediately: true) }
-        case "session":
-            selectedTab = 0
-            Task { await dictation.startKeyboardSession(recordImmediately: false) }
         case "settings", "ki":
             selectedTab = 1
         case "macros", "makros":

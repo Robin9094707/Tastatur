@@ -31,13 +31,18 @@ final class SharedStore: ObservableObject {
 
     // MARK: - Werte
 
+    static let defaultChatModel = "gpt-6-luna"
+    static let fallbackModels = ["gpt-6-luna", "gpt-5.6-luna", "gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"]
+    static let settingsVersion = 2
+
     @Published var apiKey: String = "" { didSet { set(apiKey, "apiKey") } }
     @Published var baseURL: String = "https://api.openai.com/v1" { didSet { set(baseURL, "baseURL") } }
-    @Published var chatModel: String = "gpt-5-mini" { didSet { set(chatModel, "chatModel") } }
-    @Published var fastModel: String = "gpt-5-nano" { didSet { set(fastModel, "fastModel") } }
-    @Published var transcribeModel: String = "gpt-transcribe" { didSet { set(transcribeModel, "transcribeModel") } }
-    @Published var reasoningEffort: String = "minimal" { didSet { set(reasoningEffort, "reasoningEffort") } }
+    @Published var chatModel: String = SharedStore.defaultChatModel { didSet { set(chatModel, "chatModel") } }
+    @Published var fastModel: String = SharedStore.defaultChatModel { didSet { set(fastModel, "fastModel") } }
+    @Published var reasoningEffort: String = "low" { didSet { set(reasoningEffort, "reasoningEffort") } }
     @Published var knownModels: [String] = [] { didSet { setCodable(knownModels, "knownModels") } }
+    @Published var streamResponses: Bool = true { didSet { set(streamResponses, "streamResponses") } }
+    @Published var outputLanguage: String = "auto" { didSet { set(outputLanguage, "outputLanguage") } }
 
     @Published var personalContext: String = "" { didSet { set(personalContext, "personalContext") } }
     @Published var writingStyle: String = "" { didSet { set(writingStyle, "writingStyle") } }
@@ -55,6 +60,7 @@ final class SharedStore: ObservableObject {
 
     @Published var haptics: Bool = true { didSet { set(haptics, "haptics") } }
     @Published var keySound: Bool = true { didSet { set(keySound, "keySound") } }
+    @Published var keyPopups: Bool = true { didSet { set(keyPopups, "keyPopups") } }
     @Published var autocorrect: Bool = true { didSet { set(autocorrect, "autocorrect") } }
     @Published var autocapitalize: Bool = true { didSet { set(autocapitalize, "autocapitalize") } }
     @Published var doubleSpacePeriod: Bool = true { didSet { set(doubleSpacePeriod, "doubleSpacePeriod") } }
@@ -63,24 +69,21 @@ final class SharedStore: ObservableObject {
     @Published var showNumberRow: Bool = false { didSet { set(showNumberRow, "showNumberRow") } }
     @Published var keyboardTint: Int = 0 { didSet { set(keyboardTint, "keyboardTint") } }
 
-    @Published var dictationLanguage: String = "de" { didSet { set(dictationLanguage, "dictationLanguage") } }
-    @Published var dictationCleanup: Bool = true { didSet { set(dictationCleanup, "dictationCleanup") } }
-    @Published var dictationVocabulary: String = "" { didSet { set(dictationVocabulary, "dictationVocabulary") } }
-    @Published var dictationSessionMinutes: Int = 5 { didSet { set(dictationSessionMinutes, "dictationSessionMinutes") } }
-
     private var loading = false
 
     func reload() {
         loading = true
         defer { loading = false }
         let d = defaults
+        migrateIfNeeded()
         apiKey = d.string(forKey: "apiKey") ?? ""
         baseURL = d.string(forKey: "baseURL") ?? "https://api.openai.com/v1"
-        chatModel = d.string(forKey: "chatModel") ?? "gpt-5-mini"
-        fastModel = d.string(forKey: "fastModel") ?? "gpt-5-nano"
-        transcribeModel = d.string(forKey: "transcribeModel") ?? "gpt-transcribe"
-        reasoningEffort = d.string(forKey: "reasoningEffort") ?? "minimal"
+        chatModel = d.string(forKey: "chatModel") ?? SharedStore.defaultChatModel
+        fastModel = d.string(forKey: "fastModel") ?? SharedStore.defaultChatModel
+        reasoningEffort = d.string(forKey: "reasoningEffort") ?? "low"
         knownModels = getCodable("knownModels") ?? []
+        streamResponses = bool("streamResponses", true)
+        outputLanguage = d.string(forKey: "outputLanguage") ?? "auto"
         personalContext = d.string(forKey: "personalContext") ?? ""
         writingStyle = d.string(forKey: "writingStyle") ?? ""
         profiles = getCodable("profiles") ?? ContextProfile.defaults
@@ -94,6 +97,7 @@ final class SharedStore: ObservableObject {
         clipboardLimit = d.object(forKey: "clipboardLimit") as? Int ?? 50
         haptics = bool("haptics", true)
         keySound = bool("keySound", true)
+        keyPopups = bool("keyPopups", true)
         autocorrect = bool("autocorrect", true)
         autocapitalize = bool("autocapitalize", true)
         doubleSpacePeriod = bool("doubleSpacePeriod", true)
@@ -101,10 +105,26 @@ final class SharedStore: ObservableObject {
         learnWords = bool("learnWords", true)
         showNumberRow = bool("showNumberRow", false)
         keyboardTint = d.object(forKey: "keyboardTint") as? Int ?? 0
-        dictationLanguage = d.string(forKey: "dictationLanguage") ?? "de"
-        dictationCleanup = bool("dictationCleanup", true)
-        dictationVocabulary = d.string(forKey: "dictationVocabulary") ?? ""
-        dictationSessionMinutes = d.object(forKey: "dictationSessionMinutes") as? Int ?? 5
+    }
+
+    /// Aktualisiert alte Einstellungen (neue Standardmodelle, neue KI-Aktionen).
+    private func migrateIfNeeded() {
+        let d = defaults
+        let version = d.integer(forKey: "settingsVersion")
+        guard version < SharedStore.settingsVersion else { return }
+        let oldDefaults: Set<String> = ["gpt-5-mini", "gpt-5-nano", ""]
+        if oldDefaults.contains(d.string(forKey: "chatModel") ?? "") { d.set(SharedStore.defaultChatModel, forKey: "chatModel") }
+        if oldDefaults.contains(d.string(forKey: "fastModel") ?? "") { d.set(SharedStore.defaultChatModel, forKey: "fastModel") }
+        if d.string(forKey: "reasoningEffort") == "minimal" { d.set("low", forKey: "reasoningEffort") }
+        if let data = d.data(forKey: "actions"), let old = try? JSONDecoder().decode([AIAction].self, from: data) {
+            let custom = old.filter { !$0.builtIn }
+            if let newData = try? JSONEncoder().encode(AIAction.defaults + custom) { d.set(newData, forKey: "actions") }
+        }
+        if let scope = d.string(forKey: "aiScope"), AIScope(rawValue: scope) == nil { d.removeObject(forKey: "aiScope") }
+        for key in ["transcribeModel", "dictationLanguage", "dictationCleanup", "dictationVocabulary", "dictationSessionMinutes"] {
+            d.removeObject(forKey: key)
+        }
+        d.set(SharedStore.settingsVersion, forKey: "settingsVersion")
     }
 
     var activeProfile: ContextProfile? {

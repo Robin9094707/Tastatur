@@ -31,7 +31,7 @@ struct AIView: View {
                     Label("Umgebenden Text als Kontext senden", systemImage: "text.viewfinder")
                 }
             } header: { Text("Kontext") } footer: {
-                Text("Der Kontext wird jeder KI-Anfrage mitgegeben, damit Antworten nach dir klingen.")
+                Text("Der Kontext wird jeder KI-Anfrage mitgegeben, damit Antworten nach dir klingen. Auch sehr lange Texte im Feld werden vollständig eingelesen.")
             }
             .glassRow()
 
@@ -39,20 +39,24 @@ struct AIView: View {
                 NavigationLink { ActionsView() } label: {
                     row("KI-Aktionen", "wand.and.stars", "\(store.actions.filter(\.enabled).count) aktiv")
                 }
+                Toggle(isOn: $store.streamResponses) {
+                    Label("Antworten live anzeigen", systemImage: "text.cursor")
+                }
+                Picker(selection: $store.outputLanguage) {
+                    Text("Wie Originaltext").tag("auto")
+                    Text("Deutsch").tag("Deutsch")
+                    Text("Englisch").tag("Englisch")
+                } label: {
+                    Label("Antwortsprache", systemImage: "character.bubble")
+                }
                 Toggle(isOn: $store.aiSuggestions) {
                     Label("KI-Wortvorschläge", systemImage: "text.word.spacing")
                 }
             } header: { Text("Funktionen") } footer: {
-                Text("KI-Wortvorschläge nutzen das schnelle Modell und kosten pro Pause beim Tippen eine kleine Anfrage.")
+                Text("„Live anzeigen“ streamt die Antwort Wort für Wort – fühlt sich viel schneller an. KI-Wortvorschläge kosten pro Tipp-Pause eine kleine Anfrage.")
             }
             .glassRow()
 
-            Section {
-                NavigationLink { DictationSettingsView() } label: {
-                    row("Diktat", "waveform", store.transcribeModel)
-                }
-            } header: { Text("Sprache") }
-            .glassRow()
         }
         .glassBackground()
         .navigationTitle("KI")
@@ -173,9 +177,6 @@ struct APIKeyView: View {
         if !set.contains(store.fastModel), let m = ModelsView.preferredFast.first(where: set.contains) {
             store.fastModel = m
         }
-        if !set.contains(store.transcribeModel), let m = ModelsView.preferredTranscribe.first(where: set.contains) {
-            store.transcribeModel = m
-        }
     }
 }
 
@@ -184,9 +185,8 @@ struct ModelsView: View {
     @State private var loading = false
     @State private var error: String?
 
-    static let preferredChat = ["gpt-6-luna", "gpt-5.6-luna", "gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"]
+    static let preferredChat = SharedStore.fallbackModels
     static let preferredFast = ["gpt-6-luna", "gpt-5.6-luna", "gpt-5-nano", "gpt-4.1-nano", "gpt-4o-mini"]
-    static let preferredTranscribe = ["gpt-transcribe", "gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"]
 
     private var chatModels: [String] {
         let all = store.knownModels.filter { m in
@@ -195,32 +195,35 @@ struct ModelsView: View {
         return all.isEmpty ? Array(Set(Self.preferredChat + Self.preferredFast)).sorted() : all
     }
 
-    private var transcribeModels: [String] {
-        let all = store.knownModels.filter { $0.contains("transcribe") || $0.contains("whisper") }
-        return all.isEmpty ? Self.preferredTranscribe : all
-    }
-
     var body: some View {
         List {
             Section {
                 modelField("Hauptmodell", "Für KI-Aktionen und Texte", $store.chatModel, chatModels)
-                modelField("Schnelles Modell", "Für Wortvorschläge und Diktat-Aufbereitung", $store.fastModel, chatModels)
+                modelField("Schnelles Modell", "Für KI-Wortvorschläge", $store.fastModel, chatModels)
                 Picker("Denkaufwand", selection: $store.reasoningEffort) {
                     Text("Standard").tag("standard")
                     Text("Keiner").tag("none")
-                    Text("Minimal (schnell)").tag("minimal")
-                    Text("Niedrig").tag("low")
+                    Text("Minimal").tag("minimal")
+                    Text("Niedrig (empfohlen)").tag("low")
                     Text("Mittel").tag("medium")
                 }
             } header: { Text("Text-Modelle") } footer: {
-                Text("Für eine Tastatur ist „Minimal“ ideal: schnelle Antworten, geringe Kosten. Wird vom Modell nicht unterstützt, wird es automatisch ignoriert.")
+                Text("„Niedrig“ ist ideal für eine Tastatur: schnelle Antworten, gute Qualität. Nicht unterstützte Werte werden automatisch ignoriert.")
             }
             .glassRow()
 
             Section {
-                modelField("Transkription", "Diktat (Sprache → Text)", $store.transcribeModel, transcribeModels)
-            } header: { Text("Sprache") } footer: {
-                Text("Empfehlung: gpt-transcribe (neuestes Modell, ca. 0,0045 $/Min.) oder gpt-4o-mini-transcribe (ca. 0,003 $/Min.). Bei einem Fehler wird automatisch auf ein verfügbares Modell ausgewichen.")
+                VStack(alignment: .leading, spacing: 6) {
+                    priceRow("gpt-6-luna", "0,10 $ / 0,50 $", "Empfohlen · neu · 1 Mio. Kontext")
+                    priceRow("gpt-5.6-luna", "0,20 $ / 1,20 $", "Vorgänger")
+                    priceRow("gpt-5-mini", "0,25 $ / 2,00 $", "Älter")
+                }
+                Button("GPT-6 Luna verwenden") {
+                    store.chatModel = "gpt-6-luna"
+                    store.fastModel = "gpt-6-luna"
+                }
+            } header: { Text("Preise pro 1 Mio. Tokens (Ein/Aus)") } footer: {
+                Text("Eine typische Korrektur kostet mit GPT-6 Luna weniger als 0,001 $. Ist ein Modell für deinen Schlüssel nicht verfügbar, wird automatisch auf das nächste ausgewichen.")
             }
             .glassRow()
 
@@ -263,6 +266,17 @@ struct ModelsView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    private func priceRow(_ model: String, _ price: String, _ note: String) -> some View {
+        HStack {
+            VStack(alignment: .leading) {
+                Text(model).font(.subheadline.monospaced().weight(.semibold))
+                Text(note).font(.caption2).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text(price).font(.caption.monospacedDigit())
+        }
     }
 
     private func refresh() {
@@ -420,7 +434,7 @@ struct ActionsView: View {
                         Image(systemName: action.symbol).frame(width: 28).foregroundStyle(.tint)
                         VStack(alignment: .leading) {
                             Text(action.title)
-                            Text(action.prompt).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            Text("\(action.category.label) · \(action.prompt)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
                         Spacer()
                         Toggle("", isOn: $action.enabled).labelsHidden()
@@ -471,6 +485,14 @@ struct ActionEditor: View {
             Form {
                 Section("Titel") { TextField("z. B. Wie ein Pirat", text: $action.title) }
                     .glassRow()
+                Section("Kategorie") {
+                    Picker("Kategorie", selection: $action.category) {
+                        ForEach(ActionCategory.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                    Toggle("Änderungen markieren", isOn: $action.showDiff)
+                }
+                .glassRow()
                 Section("Symbol") {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 8)) {
                         ForEach(symbols, id: \.self) { s in
@@ -503,36 +525,3 @@ struct ActionEditor: View {
     }
 }
 
-struct DictationSettingsView: View {
-    @EnvironmentObject var store: SharedStore
-
-    var body: some View {
-        Form {
-            Section {
-                Picker("Sprache", selection: $store.dictationLanguage) {
-                    Text("Automatisch").tag("auto")
-                    Text("Deutsch").tag("de")
-                    Text("Englisch").tag("en")
-                    Text("Französisch").tag("fr")
-                    Text("Spanisch").tag("es")
-                    Text("Italienisch").tag("it")
-                    Text("Türkisch").tag("tr")
-                }
-                Toggle("Mit KI aufbereiten", isOn: $store.dictationCleanup)
-                Stepper("Sitzung: \(store.dictationSessionMinutes) Min.", value: $store.dictationSessionMinutes, in: 1...60)
-            } footer: {
-                Text("„Aufbereiten“ entfernt Füllwörter, setzt Satzzeichen und versteht Befehle wie „neue Zeile“. Die Sitzung hält das Mikrofon für die Tastatur bereit und endet nach Inaktivität automatisch.")
-            }
-            .glassRow()
-            Section {
-                TextField("z. B. Kubernetes, Dr. Müller, SwiftUI", text: $store.dictationVocabulary, axis: .vertical)
-                    .lineLimit(2...6)
-            } header: { Text("Eigenes Vokabular") } footer: {
-                Text("Namen und Fachbegriffe, die besser erkannt werden sollen.")
-            }
-            .glassRow()
-        }
-        .glassBackground()
-        .navigationTitle("Diktat")
-    }
-}

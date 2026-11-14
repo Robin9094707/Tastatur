@@ -104,7 +104,7 @@ final class KeyboardState: ObservableObject {
         var pairs: [Pair]
         struct Pair: Equatable { var wrong: String; var right: String }
         var label: String {
-            pairs.count == 1 ? "\(pairs[0].wrong) → \(pairs[0].right)" : "\(pairs.count) Tippfehler korrigiert"
+            pairs.count == 1 ? "\(pairs[0].wrong) → \(pairs[0].right)" : "KI: \(pairs.count) Stellen korrigiert"
         }
     }
     private var predictionCache: [String: OpenAIClient.Prediction] = [:]
@@ -785,6 +785,7 @@ final class KeyboardState: ObservableObject {
 
     func scheduleRefresh() {
         if !liveEditing, !bar.issues.isEmpty { pruneIssues() }
+        if !liveEditing { scheduleEndCheck() }
         if !liveEditing {
             liveCheckWork?.cancel()
             if liveCheckPending { scheduleLiveCheck() }
@@ -1759,7 +1760,7 @@ final class KeyboardState: ObservableObject {
     }
 
     private func runLiveCheck() {
-        guard store.liveAICorrection, hasFullAccess, store.hasAPIKey, panel == .none, !composeMode, shouldAutocorrect else { return }
+        guard store.liveAICorrection, store.aiCorrectMode == "word", hasFullAccess, store.hasAPIKey, panel == .none, !composeMode, shouldAutocorrect else { return }
         let snapshot = before
         guard let last = snapshot.last, !(last.isLetter || last.isNumber) else { return }
         let region = String(snapshot.suffix(320))
@@ -2140,6 +2141,79 @@ final class KeyboardState: ObservableObject {
         afterCommit()
     }
 
+    // MARK: - KI-Schlusskorrektur („Am Ende“)
+
+    private var endCheckWork: DispatchWorkItem?
+    private var endCheckTask: Task<Void, Never>?
+    private var lastEndChecked = ""
+
+    /// Nach jeder Eingabe neu starten: Erst wenn du kurz pausierst, liest die KI den ganzen Text.
+    private func scheduleEndCheck() {
+        endCheckWork?.cancel()
+        endCheckTask?.cancel()
+        guard store.aiCorrectMode == "end", hasFullAccess, store.hasAPIKey, panel == .none, !composeMode else { return }
+        let work = DispatchWorkItem { [weak self] in self?.runEndCheck(manual: false) }
+        endCheckWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2, execute: work)
+    }
+
+    /// Korrigiert den ganzen Text direkt im Feld (Paare ersetzen, Cursor bleibt, mit Rückgängig).
+    func runEndCheck(manual: Bool) {
+        if manual {
+            guard requireAI() else { return }
+        } else {
+            guard store.aiCorrectMode == "end", hasFullAccess, store.hasAPIKey, panel == .none, !composeMode,
+                  shouldAutocorrect, !isCommandLine, !liveEditing else { return }
+        }
+        let snapshotBefore = before, snapshotAfter = after
+        // Cursor mitten in einem Wort (Text links und rechts direkt dran) → nicht stören
+        if !manual, let l = snapshotBefore.last, let r = snapshotAfter.first, l.isLetter, r.isLetter { return }
+        let text = String(snapshotBefore.suffix(2500)) + (manual ? String(snapshotAfter.prefix(1500)) : "")
+        guard text.trimmingCharacters(in: .whitespacesAndNewlines).wordCount >= (manual ? 1 : 2) else {
+            if manual { showToast("Kein Text zum Korrigieren.") }
+            return
+        }
+        if !manual, text == lastEndChecked { return }
+        lastEndChecked = text
+        let afterContext = manual ? nil : String(snapshotAfter.prefix(300))
+        bar.checking = true
+        if manual { showToast("KI liest deinen Text …") }
+        endCheckTask = Task { [weak self] in
+            guard let self else { return }
+            let fixes = (try? await self.client.finalCheck(text: text, after: afterContext)) ?? []
+            await MainActor.run { self.bar.checking = false }
+            guard !Task.isCancelled else { return }
+            await self.applyEndFixes(fixes, snapshot: snapshotBefore, manual: manual)
+        }
+    }
+
+    @MainActor
+    private func applyEndFixes(_ fixes: [OpenAIClient.TypoFix], snapshot: String, manual: Bool) async {
+        // Nur anwenden, wenn du inzwischen nicht weitergetippt hast
+        guard before == snapshot, panel == .none || manual, !composeMode else { return }
+        let safe = fixes.filter { f in
+            !neverFix.contains(f.wrong.lowercased()) && f.wrong.count <= 80 && f.right.count <= 120
+                && (before.contains(f.wrong) || after.contains(f.wrong))
+        }
+        guard !safe.isEmpty else {
+            if manual { showToast("Alles sauber ✓") }
+            return
+        }
+        var applied: [LiveFix.Pair] = []
+        liveEditing = true
+        for f in safe.prefix(12) {
+            if await replacePhrase(f.wrong, with: f.right) {
+                applied.append(.init(wrong: f.wrong, right: f.right))
+                for w in f.right.split(separator: " ") where w.count > 2 { engine.learn(word: String(w), previous: nil) }
+            }
+        }
+        liveEditing = false
+        guard !applied.isEmpty else { return }
+        lastEndChecked = String(before.suffix(2500))
+        store.incrementStat("corrections", by: applied.count)
+        showLiveFix(LiveFix(pairs: applied))
+    }
+
     // MARK: - Ziel-App
 
     /// Setzt die erkannte App (falls iOS sie verrät).
@@ -2166,7 +2240,7 @@ final class KeyboardState: ObservableObject {
     @Published var checkedText = ""
 
     private var contextCheckReady: Bool {
-        store.contextCheck != "off" && hasFullAccess && store.hasAPIKey && panel == .none && !composeMode && shouldAutocorrect && !isCommandLine
+        store.contextCheck != "off" && store.aiCorrectMode != "end" && hasFullAccess && store.hasAPIKey && panel == .none && !composeMode && shouldAutocorrect && !isCommandLine
     }
 
     /// Nach jedem Wort: kurz warten und dann im Hintergrund prüfen.
@@ -2736,6 +2810,7 @@ final class KeyboardState: ObservableObject {
         case "commands": toggle(.commands)
         case "discord": toggle(.discord)
         case "check": runContextCheck(manual: true)
+        case "fix": runEndCheck(manual: true)
         case "clipboard": toggle(.clipboard)
         case "stickers": toggle(.stickers)
         case "emoji": toggle(.emoji)

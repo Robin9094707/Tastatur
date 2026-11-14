@@ -968,8 +968,15 @@ struct KeyboardSettingsPanel: View {
                 chip("Mittel", selected: store.reasoningEffort == "medium") { store.reasoningEffort = "medium" }
                 chip("Gründlich", selected: store.reasoningEffort == "high") { store.reasoningEffort = "high" }
             }
+            Text("KI-Korrektur").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                chip("Am Ende ✓", selected: store.aiCorrectMode == "end") { store.aiCorrectMode = "end" }
+                chip("Wort für Wort", selected: store.aiCorrectMode == "word") { store.aiCorrectMode = "word"; store.liveAICorrection = true }
+                chip("Aus", selected: store.aiCorrectMode == "off") { store.aiCorrectMode = "off" }
+            }
+            Text(store.aiCorrectMode == "end" ? "Du tippst ungestört. Sobald du kurz pausierst, liest die KI den ganzen Text und korrigiert ihn direkt – mit Rückgängig. Jederzeit auch über „Korrigieren“ in der Schnellleiste." : store.aiCorrectMode == "word" ? "Die KI prüft schon während des Tippens alle paar Wörter (mehr Anfragen)." : "Nur lokale Autokorrektur – KI nur auf Knopfdruck („Korrigieren“).")
+                .font(.caption2).foregroundStyle(.secondary)
             grid {
-                toggle("Live-Korrektur", "checkmark.seal", $store.liveAICorrection)
                 toggle("Live-Antwort", "text.cursor", $store.streamResponses)
                 toggle("Umfeld senden", "text.viewfinder", $store.useAppContext)
             }

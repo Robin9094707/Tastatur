@@ -295,6 +295,33 @@ final class OpenAIClient {
         }
     }
 
+    // MARK: - Schlusskorrektur (ganzer Text)
+
+    /// Korrigiert den ganzen Text minimal (Rechtschreibung, Grammatik, Wortwahl im Kontext) und liefert die Änderungen als Paare.
+    func finalCheck(text: String, after: String?) async throws -> [TypoFix] {
+        var user = "<text>\n\(text)\n</text>"
+        if let after, !after.isEmpty { user += "\n\nText danach (nur Kontext, nicht korrigieren):\n\(after)" }
+        let raw = try await chat(messages: [
+            ChatMessage(role: "system", content: """
+            Du bist das Schlusslektorat einer Smartphone-Tastatur. Der Nutzer hat schnell getippt; lies den GANZEN Text und korrigiere ihn sauber, aber minimal:
+            Tippfehler, Rechtschreibung, Grammatik, Groß-/Kleinschreibung, falsche Wörter im Kontext (das/dass, seid/seit, wieder/wider, ihm/ihn …), fehlende Umlaute, offensichtlich vergessene oder doppelte Wörter, Kommas nur wenn eindeutig nötig.
+            NICHT ändern: Stil, Wortwahl, Umgangssprache, Satzbau, Emojis, Namen, Abkürzungen, absichtliche Schreibweisen\(store.activeApp?.markdown == true ? ", Markdown-Zeichen" : ""). Nichts ergänzen, nichts umformulieren.
+            Gib jede Änderung als Paar zurück: „falsch“ = EXAKTER Ausschnitt aus dem Text (1–4 Wörter, so kurz wie möglich, eindeutig), „richtig“ = Ersatz.
+            Antworte NUR mit JSON: {"fixes":[{"falsch":"…","richtig":"…"}]} – bei fehlerfreiem Text {"fixes":[]}.
+            """),
+            ChatMessage(role: "user", content: user),
+        ], model: store.fastModel, stream: false, effort: "low")
+        guard let start = raw.firstIndex(of: "{"), let end = raw.lastIndex(of: "}"),
+              let data = String(raw[start...end]).data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let list = json["fixes"] as? [[String: Any]] else { return [] }
+        return list.compactMap { item in
+            guard let w = item["falsch"] as? String, let r = item["richtig"] as? String,
+                  !w.isEmpty, w != r, text.contains(w) else { return nil }
+            return TypoFix(wrong: w, right: r, confidence: 1)
+        }
+    }
+
     // MARK: - Kontextprüfung
 
     struct CheckIssue: Identifiable, Equatable, Hashable {

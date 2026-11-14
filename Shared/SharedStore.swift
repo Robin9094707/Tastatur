@@ -33,7 +33,7 @@ final class SharedStore: ObservableObject {
 
     static let defaultChatModel = "gpt-6-luna"
     static let fallbackModels = ["gpt-6-luna", "gpt-5.6-luna", "gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"]
-    static let settingsVersion = 8
+    static let settingsVersion = 9
 
     @Published var apiKey: String = "" { didSet { set(apiKey, "apiKey") } }
     /// API-Schlüssel vorübergehend deaktiviert (bleibt gespeichert).
@@ -133,6 +133,8 @@ final class SharedStore: ObservableObject {
     @Published var tapCorrection: Bool = true { didSet { set(tapCorrection, "tapCorrection") } }
     @Published var aiTypoTurbo: Bool = true { didSet { set(aiTypoTurbo, "aiTypoTurbo") } }
     @Published var liveAICorrection: Bool = true { didSet { set(liveAICorrection, "liveAICorrection") } }
+    /// KI-Korrektur: "end" = in Tipp-Pausen den ganzen Text, "word" = Wort für Wort beim Tippen, "off"
+    @Published var aiCorrectMode: String = "end" { didSet { set(aiCorrectMode, "aiCorrectMode") } }
 
     // Emojis
     @Published var emojiRecents: [String] = [] { didSet { setCodable(emojiRecents, "emojiRecents") } }
@@ -218,6 +220,7 @@ final class SharedStore: ObservableObject {
         upd(\.commandEdition, d.string(forKey: "commandEdition") ?? "Bedrock")
         upd(\.toolbarItems, getCodable("toolbarItems") ?? ToolItem.defaultOrder)
         upd(\.liveAICorrection, bool("liveAICorrection", true))
+        upd(\.aiCorrectMode, d.string(forKey: "aiCorrectMode") ?? "end")
     }
 
     /// Setzt einen Wert nur, wenn er sich geändert hat (vermeidet unnötiges Neuzeichnen).
@@ -286,6 +289,11 @@ final class SharedStore: ObservableObject {
         if version < 5 { d.set("manual", forKey: "aiSuggestMode") }
         if version < 6, let data = d.data(forKey: "toolbarItems"), var items = try? JSONDecoder().decode([String].self, from: data) {
             if !items.contains("commands") { items.insert("commands", at: min(2, items.count)) }
+            if let newData = try? JSONEncoder().encode(items) { d.set(newData, forKey: "toolbarItems") }
+        }
+        // v9: „Alles korrigieren“ direkt hinter die KI
+        if version < 9, let data = d.data(forKey: "toolbarItems"), var items = try? JSONDecoder().decode([String].self, from: data) {
+            if !items.contains("fix") { items.insert("fix", at: items.firstIndex(of: "ai").map { $0 + 1 } ?? 0) }
             if let newData = try? JSONEncoder().encode(items) { d.set(newData, forKey: "toolbarItems") }
         }
         // v8: Discord-Werkzeug und Textprüfung in die Schnellleiste

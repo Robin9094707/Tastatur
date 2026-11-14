@@ -14,8 +14,8 @@ Der Nutzer spricht Deutsch und möchte nach jeder Änderung eine **fertige IPA**
 ## Struktur
 - `project.yml` – Targets `Tastatur` (App, `de.tastatur.app`) und `TastaturKeyboard` (Extension, `de.tastatur.app.keyboard`), App Group `group.de.tastatur.app`.
 - `Shared/` (in beiden Targets):
-  - `SharedStore.swift` – alle Einstellungen (App Group, Fallback auf `UserDefaults.standard`). `reload()` setzt Werte nur bei Änderung (`upd`). **Migrationen** über `settingsVersion` in `migrateIfNeeded()` (aktuell 8) – bei neuen Standard-Aktionen/Werkzeugen Version erhöhen.
-  - `OpenAIClient.swift` – Chat Completions mit Streaming, Modell-Fallback (`SharedStore.fallbackModels`, Standard **gpt-6-luna**), automatisches Weglassen nicht unterstützter Parameter (`reasoning_effort`, `stream`), Chunking sehr langer Texte, `predict` (KI-Vorschläge), `typoCheck` (Live-Korrektur), `translate`, `minecraftCommand`.
+  - `SharedStore.swift` – alle Einstellungen (App Group, Fallback auf `UserDefaults.standard`). `reload()` setzt Werte nur bei Änderung (`upd`). **Migrationen** über `settingsVersion` in `migrateIfNeeded()` (aktuell 10) – bei neuen Standard-Aktionen/Werkzeugen Version erhöhen.
+  - `OpenAIClient.swift` – Chat Completions mit Streaming, Modell-Fallback (`SharedStore.fallbackModels`, Standard **gpt-6-luna**), automatisches Weglassen nicht unterstützter Parameter (`reasoning_effort`, `stream`), Chunking sehr langer Texte, `predict` (KI-Vorschläge), `finalCheck` (Schlusskorrektur des ganzen Textes), `contextCheck`, `swipeWord`, `discordAnnouncement`, `learnProfile`, `translate`, `minecraftCommand`.
   - `Models.swift` – Makros, Ablage, Profile, KI-Aktionen (Kategorien inkl. Formatieren), `TextDiff`, `SavedCommand` (Minecraft-Befehle).
   - `Glass.swift` – `glass()`/`glassCapsule()`-Helfer. **In der Tastatur ist `GlassConfig.lightweight = true`** (Speicher!): echtes Liquid Glass nur mit `force: true` (Toolbar). Hintergründe, Verläufe, `KeyboardBackgroundView`, Bild-Downsampling.
   - `KeyStyle.swift` – 7 Tastenstile, `KeyStyleKit.colors`, 21 `ThemePreset`s + `random()`, `ThemeThumbnail`.
@@ -26,6 +26,8 @@ Der Nutzer spricht Deutsch und möchte nach jeder Änderung eine **fertige IPA**
   - `KeyboardViewController.swift` – Höhe, Rotation/Querformat (`updateLayoutMetrics`), Hell/Dunkel des Textfelds, `delaysTouchesBegan=false` (Rand-Verzögerung), `openURL`.
   - `KeyboardState.swift` – Herzstück: Tippen, Autokorrektur, Vorschläge, KI (startAI/runAI/perform), Volltext-Einlesen (`readFullText` – bewegt den Cursor schrittweise), Ersetzen, Übersetzen (Feld/Live/Ablage), Live-Korrektur, Befehlsmodus (Zeile beginnt mit „/“ → keine Korrekturen), Sticker, Cursor, Rechner, Einstellungs-Eingaben (`ComposeTarget`).
     - **Performance:** `BarModel` (Vorschlagsleiste) und `KeyModel` (Tasten) sind getrennte ObservableObjects – Tippen darf nicht die ganze SwiftUI-Oberfläche neu zeichnen.
+    - **Keine schwere Arbeit pro Tastendruck!** KI-Korrektur nur „Wenn ich fertig bin“ (Pause ≈2,5 s → `runEndCheck`, Korrekturen werden in der Leiste angeboten, nie ungefragt eingesetzt) oder manuell (Werkzeug „Korrigieren“). „Wort für Wort“/KI-Turbo wurden wegen Hängern entfernt.
+    - Power-Tippen: lernende Trefferzonen (`touchModel`), Tipp-Korrektur über Fingerpositionen (`smartCorrection`, nur beim Leerzeichen), Leertasten-Rettung.
   - `KeysView.swift` – Tastenfeld in **UIKit** (Multitouch, Rollover, Popups, Akzente, intelligente Trefferzonen, Leertasten-Cursor). Abonniert `KeyModel` direkt per Combine.
   - `KeyboardView.swift` – SwiftUI-Root, Toolbar (Vorschläge, ✨-Knopf „KI denk mit“, Eingabe-/Übersetzungsleiste), Schnellleiste.
   - `Panels/Panels.swift` – alle Panels: KI, Ergebnis, Ablage, Makros, Emoji, Einstellungen (mehrseitig), Sticker, Cursor, Übersetzen, Befehle.

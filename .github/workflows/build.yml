@@ -1,0 +1,75 @@
+name: IPA bauen
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Unsignierte IPA
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Neuestes Xcode wählen
+        run: |
+          ls -d /Applications/Xcode*.app || true
+          XCODE=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$XCODE" ]; then XCODE=$(ls -d /Applications/Xcode*.app | sort -V | tail -1); fi
+          echo "Nutze $XCODE"
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+
+      - name: XcodeGen installieren
+        run: brew install xcodegen
+
+      - name: Projekt generieren
+        run: xcodegen generate
+
+      - name: Bauen
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Tastatur.xcodeproj \
+            -target Tastatur \
+            -configuration Release \
+            -sdk iphoneos \
+            SYMROOT="$PWD/build" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build | tee build.log | grep -E "error:|warning: unre|BUILD|\*\*" || true
+          test -d build/Release-iphoneos/Tastatur.app || { echo "::error::Build fehlgeschlagen"; grep -E "error:" build.log | head -50; exit 1; }
+
+      - name: Ad-hoc signieren (Entitlements einbetten) & IPA packen
+        run: |
+          APP=build/Release-iphoneos/Tastatur.app
+          APPEX="$APP/PlugIns/TastaturKeyboard.appex"
+          test -d "$APPEX" || { echo "::error::Tastatur-Erweiterung fehlt"; exit 1; }
+          codesign --force --sign - --entitlements Keyboard/TastaturKeyboard.entitlements "$APPEX"
+          codesign --force --sign - --entitlements App/Tastatur.entitlements "$APP"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry Tastatur-KI.ipa Payload
+          ls -lh Tastatur-KI.ipa
+
+      - name: IPA hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: Tastatur-KI-ipa
+          path: Tastatur-KI.ipa
+          if-no-files-found: error
+
+      - name: Build-Log bei Fehler
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log

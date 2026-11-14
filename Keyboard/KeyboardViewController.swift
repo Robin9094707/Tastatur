@@ -130,10 +130,10 @@ final class KeyboardViewController: UIInputViewController {
     private func disableTouchDelays() {
         var v: UIView? = view
         while let current = v {
-            current.gestureRecognizers?.forEach { $0.delaysTouchesBegan = false }
+            current.gestureRecognizers?.forEach { $0.delaysTouchesBegan = false; $0.delaysTouchesEnded = false }
             v = current.superview
         }
-        view.window?.gestureRecognizers?.forEach { $0.delaysTouchesBegan = false }
+        view.window?.gestureRecognizers?.forEach { $0.delaysTouchesBegan = false; $0.delaysTouchesEnded = false }
     }
 
     override func viewWillDisappear(_ animated: Bool) {

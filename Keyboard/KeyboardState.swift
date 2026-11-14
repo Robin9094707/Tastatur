@@ -856,6 +856,9 @@ final class KeyboardState: ObservableObject {
     private var refreshDelay: TimeInterval {
         let sinceKey = CACurrentMediaTime() - lastKeystroke
         guard sinceKey < 0.6 else { return 0.05 }
+        // Mehrfinger-Tempo (< 0,2 s pro Taste): Leiste erst in einer echten Pause neu zeichnen,
+        // damit zwischen zwei Fingern nie SwiftUI-Arbeit auf dem Haupt-Thread liegt.
+        if keyInterval < 0.2 { return min(0.32, max(0.16, keyInterval * 2.4)) }
         return min(0.28, max(0.07, keyInterval * 1.35))
     }
 

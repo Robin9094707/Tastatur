@@ -370,6 +370,9 @@ final class KeysView: UIView {
     private final class TouchInfo {
         var key: KeyCapView
         var startPoint: CGPoint
+        /// Zeitpunkt des Aufsetzens – kurze, schnelle Tipps werden nie als Wischen/Cursor gedeutet.
+        let startTime = CACurrentMediaTime()
+        var age: CFTimeInterval { CACurrentMediaTime() - startTime }
         var longPressTimer: Timer?
         var alternatesActive = false
         var cursorMode = false
@@ -666,7 +669,8 @@ final class KeysView: UIView {
             case .char:
                 if trackSwipe(info, p) { continue }
                 // Finger rutscht auf andere Taste → neue Taste übernehmen
-                if !info.key.cellFrame.insetBy(dx: -4, dy: -6).contains(p), let nk = key(at: p), case .char = nk.kind {
+                // Bei schnellen Tipps zählt die Taste, auf der der Finger aufsetzt (wie bei iOS)
+                if info.age > 0.14, !info.key.cellFrame.insetBy(dx: -4, dy: -6).contains(p), let nk = key(at: p), case .char = nk.kind {
                     info.key.setPressed(false)
                     info.longPressTimer?.invalidate()
                     info.key = nk
@@ -696,7 +700,39 @@ final class KeysView: UIView {
 
     override func touchesCancelled(_ set: Set<UITouch>, with event: UIEvent?) {
         for t in set {
-            finish(ObjectIdentifier(t))
+            let id = ObjectIdentifier(t)
+            // Bricht iOS eine Berührung ab (z. B. System-Geste am unteren Rand), ging beim schnellen
+            // Tippen der Buchstabe verloren. Kurze, ruhige Tipps deshalb trotzdem auslösen.
+            if let info = touches[id], !info.handled, !info.swiping, !info.cursorMode, !info.alternatesActive,
+               info.age < 0.3, info.pathLength < letterKeyWidth * 0.8 {
+                switch info.key.kind {
+                case .char, .space, .returnKey: commit(info)
+                default: break
+                }
+            }
+            finish(id)
+        }
+    }
+
+    // MARK: Keine Verzögerung durch Gesten-Erkenner
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil else { return }
+        disableAncestorTouchDelays()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.disableAncestorTouchDelays() }
+    }
+
+    /// Gesten-Erkenner in den Eltern-Views (SwiftUI, System) halten Berührungen sonst zurück –
+    /// besonders das Loslassen (delaysTouchesEnded), auf das jeder Buchstabe wartet.
+    func disableAncestorTouchDelays() {
+        var v: UIView? = self
+        while let current = v {
+            current.gestureRecognizers?.forEach {
+                $0.delaysTouchesBegan = false
+                $0.delaysTouchesEnded = false
+            }
+            v = current.superview
         }
     }
 
@@ -789,7 +825,9 @@ final class KeysView: UIView {
         info.path.append(p)
         if !info.swiping {
             // Nur mit einem Finger und erst ab einer klaren Bewegung über mehrere Tasten
-            guard touches.count == 1, info.pathLength > letterKeyWidth * 1.35 else { return false }
+            // Schnelles Mehrfinger-Tippen: kurze Tipps mit leichtem Rutschen sind nie eine Wischgeste
+            guard touches.count == 1, info.pathLength > letterKeyWidth * 1.35,
+                  info.age > 0.11 || info.pathLength > letterKeyWidth * 2.6 else { return false }
             info.swiping = true
             info.longPressTimer?.invalidate()
             info.key.setPressed(false)
@@ -870,7 +908,8 @@ final class KeysView: UIView {
     private func spaceMoved(_ info: TouchInfo, _ p: CGPoint) {
         guard state?.store.spaceCursor != false else { return }
         let dx = p.x - info.startPoint.x
-        if !info.cursorMode, abs(dx) > 12 {
+        // Schnelles Tippen: Daumen rutscht oft ein paar Punkte – das ist noch kein Cursor-Wischen
+        if !info.cursorMode, (abs(dx) > 14 && info.age > 0.16) || abs(dx) > 42 {
             info.cursorMode = true
             info.key.setPressed(true)
             state?.feedback(.medium)

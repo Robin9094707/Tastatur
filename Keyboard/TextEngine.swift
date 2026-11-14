@@ -205,8 +205,16 @@ final class TextEngine {
 
     // MARK: - Autokorrektur
 
+    /// Zusätzliche bekannte Wörter (z. B. Namen aus den Kontakten) – werden nie autokorrigiert.
+    private var extraKnown = Set<String>()
+    func setExtraKnown(_ words: Set<String>) {
+        extraKnown = words
+        correctionCache.removeAll()
+    }
+
     func isKnown(_ word: String) -> Bool {
         let lower = word.lowercased()
+        if extraKnown.contains(lower) { return true }
         if learned[word] != nil || learned[lower] != nil { return true }
         if lexiconWords.contains(lower) { return true }
         if CommonWords.set.contains(lower) { return true }
@@ -418,7 +426,7 @@ final class TextEngine {
     }
 
     func learnToken(_ t: String) {
-        guard store.learnWords, Self.isPersonalToken(t) else { return }
+        guard store.learnWords, store.learnPersonal, Self.isPersonalToken(t) else { return }
         tokens[t, default: 0] += 1
         if tokens.count > 400 {
             tokens = Dictionary(uniqueKeysWithValues: tokens.sorted { $0.value > $1.value }.prefix(300).map { ($0.key, $0.value) })

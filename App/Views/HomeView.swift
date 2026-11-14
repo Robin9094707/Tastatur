@@ -18,6 +18,7 @@ struct HomeView: View {
     @State private var photoItem: PhotosPickerItem?
     @State private var enabled = false
     @State private var testText = ""
+    @State private var showPrivacy = false
 
     var body: some View {
         ScrollView {
@@ -36,6 +37,15 @@ struct HomeView: View {
                 }
                 .buttonStyle(.plain)
                 backgroundCard
+                NavigationLink { PrivacyView() } label: {
+                    GlassCard {
+                        HStack {
+                            CardHeader(title: "Persönliches & Sicherung", symbol: "lock.shield.fill", subtitle: "Kontakte, Standort, Kalender (optional) · Sicherung in iCloud Drive")
+                            Image(systemName: "chevron.right").foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
                 NavigationLink { DictionaryView() } label: {
                     GlassCard {
                         HStack {
@@ -59,6 +69,8 @@ struct HomeView: View {
         .glassBackground()
         .navigationTitle("Tastatur KI")
         .sheet(isPresented: $showSetup) { SetupGuideView() }
+        .navigationDestination(isPresented: $showPrivacy) { PrivacyView() }
+        .onReceive(NotificationCenter.default.publisher(for: .openPrivacy)) { _ in showPrivacy = true }
         .onAppear { refresh() }
         .onChange(of: scenePhase) { _, p in if p == .active { refresh() } }
         .onChange(of: photoItem) { _, item in loadBackground(item) }

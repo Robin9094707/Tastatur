@@ -109,6 +109,7 @@ final class OpenAIClient {
         if !behavior.isEmpty { parts.append("Eigene Regeln des Nutzers (immer befolgen, außer sie widersprechen der Aufgabe):\n\(behavior)") }
         let learned = store.learnedProfile.trimmingCharacters(in: .whitespacesAndNewlines)
         if !learned.isEmpty { parts.append("Was du über den Nutzer gelernt hast (zur Orientierung):\n\(learned)") }
+        if let memory = memoryText(limit: 1500) { parts.append("KI-Gedächtnis (wichtige Notizen des Nutzers, nutze sie wenn passend):\n\(memory)") }
         let lang = store.outputLanguage
         if lang != "auto", !lang.isEmpty {
             parts.append("Antworte immer auf \(lang), außer die Aufgabe verlangt ausdrücklich eine Übersetzung.")
@@ -223,6 +224,7 @@ final class OpenAIClient {
             - "phrases": 2 unterschiedliche natürliche Fortsetzungen mit je 2–8 Wörtern NACH dem aktuellen Wort (ohne führendes Leerzeichen), die beste zuerst.
             """ + (store.writingStyle.isEmpty ? "" : "\nSchreibstil des Nutzers: \(store.writingStyle)")
               + (store.learnedProfile.isEmpty ? "" : "\nGelerntes Profil des Nutzers: \(store.learnedProfile.prefix(1200))")
+              + (memoryText(limit: 600).map { "\nNotizen des Nutzers: \($0)" } ?? "")
               + (store.activeApp.map { "\nDer Nutzer schreibt gerade in \($0.name)." } ?? "")),
             ChatMessage(role: "user", content: String(context.suffix(600))),
         ], model: store.fastModel, stream: false, effort: "minimal")
@@ -384,6 +386,57 @@ final class OpenAIClient {
             .split(separator: " ").first.map(String.init) ?? ""
         guard !word.isEmpty, word.count <= 30, word.allSatisfy({ $0.isLetter || $0 == "-" }) else { return nil }
         return word
+    }
+
+    // MARK: - Gedächtnis & Antworten
+
+    /// Die gemerkten Notizen als Stichpunkte (nil = keine/aus).
+    func memoryText(limit: Int) -> String? {
+        guard store.memoryEnabled, !store.memoryNotes.isEmpty else { return nil }
+        var out = ""
+        for n in store.memoryNotes {
+            let line = "• \(n)\n"
+            if out.count + line.count > limit { break }
+            out += line
+        }
+        return out.isEmpty ? nil : out
+    }
+
+    /// 3 passende Antworten auf eine (kopierte) Nachricht – im Stil des Nutzers.
+    func replies(to message: String, draft: String) async throws -> [String] {
+        let draftPart = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let result = try await chat(messages: [
+            ChatMessage(role: "system", content: systemPrompt(extra: """
+            Aufgabe: Der Nutzer hat eine Nachricht kopiert, auf die er antworten möchte. Schlage genau 3 unterschiedliche, natürliche Antworten vor,
+            so wie der Nutzer selbst schreiben würde (sein Ton, seine Anrede, kurz wie im Chat). Varianten: z. B. zustimmend, nachfragend, ablehnend/ausweichend – je nachdem, was passt.
+            Antworte in der Sprache der Nachricht. Gib NUR die 3 Antworten zurück, eine pro Zeile, ohne Nummerierung, ohne Anführungszeichen.
+            """)),
+            ChatMessage(role: "user", content: "<text>\(message.prefix(2500))</text>" + (draftPart.isEmpty ? "" : "\nBisheriger Entwurf des Nutzers (aufgreifen): \(draftPart.suffix(500))")),
+        ], model: store.fastModel, stream: false, effort: "minimal")
+        return result.split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "\"„“•-– 0123456789.)")) }
+            .filter { $0.count >= 2 }
+            .prefix(3)
+            .map { String($0) }
+    }
+
+    /// Generalüberblick: wichtige, dauerhafte Dinge aus den Texten (für das KI-Gedächtnis).
+    func extractMemories(samples: [String], existing: [String]) async throws -> [String] {
+        let result = try await chat(messages: [
+            ChatMessage(role: "system", content: """
+            Du pflegst das Gedächtnis einer Tastatur-KI. Lies die Texte des Nutzers und notiere bis zu 5 NEUE, dauerhaft nützliche Fakten,
+            die beim späteren Schreiben helfen (laufende Projekte, Pläne und Termine, wiederkehrende Personen mit Vornamen/Rolle, Vorlieben, Begriffe/Namen, die er oft nutzt).
+            Je Fakt ein kurzer Satz, eine Zeile, ohne Aufzählungszeichen. Nichts, was schon im bestehenden Gedächtnis steht.
+            KEINE sensiblen Daten (Passwörter, Codes, Kontonummern, Gesundheit, genaue Adressen). Wenn nichts Neues: antworte nur mit „-“.
+            """),
+            ChatMessage(role: "user", content: "Bestehendes Gedächtnis:\n" + (existing.isEmpty ? "(leer)" : existing.prefix(40).joined(separator: "\n"))
+                        + "\n\nTexte:\n" + samples.suffix(60).map { "– \($0)" }.joined(separator: "\n")),
+        ], stream: false, effort: "low")
+        return result.split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "•-– ")) }
+            .filter { $0.count >= 6 && $0.count <= 200 }
+            .prefix(5)
+            .map { String($0) }
     }
 
     // MARK: - Kennenlernen

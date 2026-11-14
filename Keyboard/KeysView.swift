@@ -24,6 +24,7 @@ struct KeysConfig: Equatable {
     var keyColorHex: String = "#FFFFFF"
     var textColorHex: String = ""
     var fontDesign: String = "default"
+    var hideUmlauts: Bool = false
 }
 
 // MARK: - Einzelne Taste
@@ -389,7 +390,7 @@ final class KeysView: UIView {
     private var dark: Bool { traitCollection.userInterfaceStyle == .dark }
 
     func apply(_ c: KeysConfig, rowHeight: CGFloat) {
-        let structural = config == nil || c.layer != config!.layer || c.needsGlobe != config!.needsGlobe || c.numberRow != config!.numberRow
+        let structural = config == nil || c.layer != config!.layer || c.needsGlobe != config!.needsGlobe || c.numberRow != config!.numberRow || c.hideUmlauts != config!.hideUmlauts
         let changed = c != config || rowHeight != self.rowHeight
         let oldConfig = config, oldRowHeight = self.rowHeight
         self.rowHeight = rowHeight
@@ -430,8 +431,9 @@ final class KeysView: UIView {
         }
         switch c.layer {
         case .letters:
-            rows.append(KeyLayouts.letters[0].map { (KeyKind.char($0), Width.units(1)) })
-            rows.append(KeyLayouts.letters[1].map { (KeyKind.char($0), Width.units(1)) })
+            let hidden: Set<String> = c.hideUmlauts ? ["ä", "ö", "ü"] : []
+            rows.append(KeyLayouts.letters[0].filter { !hidden.contains($0) }.map { (KeyKind.char($0), Width.units(1)) })
+            rows.append(KeyLayouts.letters[1].filter { !hidden.contains($0) }.map { (KeyKind.char($0), Width.units(1)) })
             rows.append([(KeyKind.shift, Width.flex)] + KeyLayouts.letters[2].map { (KeyKind.char($0), Width.units(1)) } + [(KeyKind.delete, Width.flex)])
         case .numbers:
             rows.append(KeyLayouts.numbers[0].map { (KeyKind.char($0), Width.units(1)) })
@@ -486,7 +488,7 @@ final class KeysView: UIView {
         for (r, row) in rowsSpec.enumerated() {
             let isBottom = r == rowsSpec.count - 1
             let unitsPerRow: CGFloat
-            if isBottom { unitsPerRow = 10 } else if isLettersLayout && !(config?.numberRow == true && r == 0) { unitsPerRow = 11 } else { unitsPerRow = 10 }
+            if isBottom { unitsPerRow = 10 } else if isLettersLayout && !(config?.numberRow == true && r == 0) { unitsPerRow = config?.hideUmlauts == true ? 10 : 11 } else { unitsPerRow = 10 }
             let unit = width / unitsPerRow
             let fixed = row.reduce(CGFloat(0)) { acc, item in
                 if case .units(let u) = item.1 { return acc + u * unit }
@@ -522,6 +524,10 @@ final class KeysView: UIView {
             if case .char(let c) = k.kind, c.count == 1, let ch = c.lowercased().first, ch.isLetter {
                 centers[ch] = CGPoint(x: k.frame.midX, y: k.frame.midY)
             }
+        }
+        // Umlaute ausgeblendet: ä/ö/ü liegen beim Wischen auf a/o/u
+        for (u, base) in [("ä", "a"), ("ö", "o"), ("ü", "u")] as [(Character, Character)] where centers[u] == nil {
+            centers[u] = centers[base]
         }
         state.keyGeometry = KeyboardState.KeyGeometry(centers: centers, keyWidth: letterKeyWidth, rowHeight: rowHeight)
     }
@@ -841,6 +847,7 @@ final class KeysView: UIView {
     }
 
     private func spaceMoved(_ info: TouchInfo, _ p: CGPoint) {
+        guard state?.store.spaceCursor != false else { return }
         let dx = p.x - info.startPoint.x
         if !info.cursorMode, abs(dx) > 12 {
             info.cursorMode = true
@@ -902,6 +909,7 @@ extension KeysView {
                    keyOpacity: CGFloat(store.keyOpacity), cornerRadius: CGFloat(store.keyCornerRadius),
                    fontScale: CGFloat(store.keyFontScale), forceDark: Theme.backgroundIsDark(store),
                    style: store.keyStyle, keyColorHex: store.keyColorHex,
-                   textColorHex: store.keyTextColorHex, fontDesign: store.keyFontDesign)
+                   textColorHex: store.keyTextColorHex, fontDesign: store.keyFontDesign,
+                   hideUmlauts: store.hideUmlauts)
     }
 }

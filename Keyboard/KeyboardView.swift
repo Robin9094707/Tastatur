@@ -64,6 +64,8 @@ struct KeyboardRootView: View {
             DiscordPanel(state: state).transition(.move(edge: .bottom).combined(with: .opacity))
         case .check:
             CheckPanel(state: state).transition(.move(edge: .bottom).combined(with: .opacity))
+        case .history:
+            HistoryPanel(state: state, extras: state.extras).transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
 
@@ -157,6 +159,7 @@ struct Toolbar: View {
         case .translate: return "Übersetzen"
         case .commands: return "Befehle"
         case .discord: return "Discord"
+        case .history: return "Verlauf & Rückgängig"
         case .check: return bar.issues.isEmpty ? "Textprüfung" : "Textprüfung · \(bar.issues.count) Hinweis\(bar.issues.count == 1 ? "" : "e")"
         default: return ""
         }
@@ -182,6 +185,29 @@ struct Toolbar: View {
                     Button { state.toggle(.check) } label: {
                         Image(systemName: "eye").font(.system(size: 14, weight: .semibold))
                             .frame(width: 32, height: 32)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 4)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            } else if let offer = bar.offer, bar.liveFix == nil {
+                HStack(spacing: 6) {
+                    Button { state.performOffer(offer) } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: offer.icon)
+                            Text(offer.title).lineLimit(1).minimumScaleFactor(0.7)
+                        }
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .frame(maxWidth: .infinity, minHeight: 32)
+                        .background(Capsule().fill(state.tint.gradient))
+                    }
+                    .buttonStyle(.plain)
+                    Button { state.dismissOffer() } label: {
+                        Image(systemName: "xmark").font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 30, height: 32)
                     }
                     .buttonStyle(.plain)
                 }
@@ -251,7 +277,8 @@ struct Toolbar: View {
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: bar.liveFix)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: bar.issues.count)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: bar.offerFixes)
-        .padding(.trailing, state.store.aiSuggestMode != "off" && bar.liveFix == nil ? 36 : 0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: bar.offer)
+        .padding(.trailing, state.store.aiSuggestMode != "off" && bar.liveFix == nil && bar.offer == nil ? 36 : 0)
         .frame(height: 38)
         .frame(maxWidth: .infinity)
         .overlay(alignment: .trailing) { thinkButton }
@@ -261,7 +288,7 @@ struct Toolbar: View {
     /// „KI denk mit“ – Vorschläge nur auf Knopfdruck (spart Anfragen).
     @ViewBuilder
     private var thinkButton: some View {
-        if state.store.aiSuggestMode != "off", bar.liveFix == nil {
+        if state.store.aiSuggestMode != "off", bar.liveFix == nil, bar.offer == nil {
             Button { state.predictNow() } label: {
                 Image(systemName: "sparkles")
                     .font(.system(size: 13, weight: .bold))

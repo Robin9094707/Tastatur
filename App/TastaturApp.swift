@@ -1,6 +1,10 @@
 import SwiftUI
 import UIKit
 
+extension Notification.Name {
+    static let openPrivacy = Notification.Name("tastatur.openPrivacy")
+}
+
 @main
 struct TastaturApp: App {
     @StateObject private var store = SharedStore.shared
@@ -17,11 +21,20 @@ struct TastaturApp: App {
                     if url.host == "chatgpt-login" {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { login.start() }
                     }
+                    // Termin aus der Tastatur speichern
+                    if url.host == "event" { PersonalDataManager.shared.handleEventURL(url) }
+                    if ["event", "privacy", "location", "contacts", "backup"].contains(url.host ?? "") {
+                        NotificationCenter.default.post(name: .openPrivacy, object: nil)
+                    }
                 }
                 .preferredColorScheme(.dark)
                 .tint(Theme.tint(store.keyboardTint))
                 .onChange(of: scenePhase) { _, phase in
-                    if phase == .active { store.reload() }
+                    if phase == .active {
+                        store.reload()
+                        PersonalDataManager.shared.refreshIfEnabled()
+                        BackupManager.autoBackupIfDue()
+                    }
                 }
         }
     }

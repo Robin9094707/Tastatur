@@ -1012,6 +1012,44 @@ struct KeyboardSettingsPanel: View {
                 actionButton("Jetzt lernen", "sparkles") { state.learnNow() }
                 actionButton("Vergessen", "trash") { state.forgetProfile() }
             }
+            Text("Persönliches & Verlauf").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            grid {
+                toggle("KI-Gedächtnis", "brain", $store.memoryEnabled)
+                toggle("Antwortvorschläge", "bubble.left.and.text.bubble.right", $store.replySuggestions)
+                toggle("Termine erkennen", "calendar.badge.plus", $store.calendarSuggest)
+                toggle("Schreibverlauf", "clock.arrow.circlepath", $store.writeHistory)
+                toggle("Kontakte", "person.2", $store.useContacts)
+                toggle("Standort", "location", $store.useLocation)
+            }
+            if store.useContacts || store.useLocation {
+                actionButton("Kontakte/Standort/Kalender in der App freigeben", "lock.open") { state.openApp("privacy") }
+            }
+            Text("Alles bleibt auf deinem iPhone. Kontakte & Standort holt die App (iOS erlaubt Tastaturen keinen eigenen Zugriff-Dialog). Die Tastatur sieht nie den Bildschirm – nur das Textfeld, in dem du schreibst.")
+                .font(.caption2).foregroundStyle(.secondary)
+            if store.memoryEnabled {
+                HStack {
+                    Text("KI-Gedächtnis · \(store.memoryNotes.count)").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    Spacer()
+                    Button { state.beginInput(.memoryNote) } label: { Label("Notiz", systemImage: "plus").font(.caption.weight(.semibold)) }
+                        .buttonStyle(.plain)
+                }
+                if store.memoryNotes.isEmpty {
+                    Text("Leer – füllt sich beim „Jetzt lernen“, über das Werkzeug „Merken“ oder per „+ Notiz“.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                ForEach(Array(store.memoryNotes.enumerated()), id: \.offset) { i, note in
+                    HStack {
+                        Text(note).font(.caption).lineLimit(2)
+                        Spacer()
+                        Button { if i < store.memoryNotes.count { store.memoryNotes.remove(at: i) } } label: {
+                            Image(systemName: "trash").foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(8)
+                    .glass(cornerRadius: 10)
+                }
+            }
             row("Über mich", store.personalContext.isEmpty ? "Tippen zum Ausfüllen" : store.personalContext, "person.crop.circle") {
                 state.beginInput(.personalContext, prefill: store.personalContext)
             }
@@ -1201,6 +1239,12 @@ struct KeyboardSettingsPanel: View {
             toggle("Klick-Ton", "speaker.wave.2", $store.keySound)
             toggle("Makros auto", "bolt", $store.macroAutoExpand)
             toggle("Ablage-Verlauf", "clock.arrow.circlepath", $store.clipboardEnabled)
+            toggle("Umlaute zeigen", "character", Binding(get: { !store.hideUmlauts }, set: { store.hideUmlauts = !$0 }))
+            toggle("Feststelltaste", "capslock", $store.capsLockEnabled)
+            toggle("Smarte „Zeichen“", "quote.opening", $store.smartPunctuation)
+            toggle("Vorschläge", "text.word.spacing", $store.showPredictions)
+            toggle("Leertasten-Cursor", "cursorarrow.motionlines", $store.spaceCursor)
+            toggle("Nummern & Mails lernen", "phone", $store.learnPersonal)
         }
     }
 

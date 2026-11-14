@@ -20,10 +20,11 @@ enum Panel: Equatable {
     case commands
     case discord
     case check
+    case history
 }
 
 struct Suggestion: Identifiable, Equatable {
-    enum Kind { case word, typed, correction, macro, ai, phrase, token, command, swipe }
+    enum Kind { case word, typed, correction, macro, ai, phrase, token, command, swipe, contact, reply }
     let id = UUID()
     var text: String
     var kind: Kind
@@ -42,6 +43,8 @@ final class BarModel: ObservableObject {
     @Published var checking = false
     /// Korrekturen nach der Schlussprüfung groß anbieten (bis zum nächsten Tastendruck).
     @Published var offerFixes = false
+    /// Angebot in der Leiste: Gelöschtes wiederherstellen, Termin speichern, Antworten …
+    @Published var offer: BarOffer?
 }
 
 /// Zustand, den nur das UIKit-Tastenfeld braucht.
@@ -56,7 +59,9 @@ final class KeyboardState: ObservableObject {
     weak var controller: KeyboardViewController?
     let store = SharedStore.shared
     let engine = TextEngine()
-    private let client = OpenAIClient(store: SharedStore.shared)
+    let client = OpenAIClient(store: SharedStore.shared)
+    /// Verlauf, Kontakte, Standort, Termine (siehe Extras.swift)
+    let extras = ExtrasState()
 
     let bar = BarModel()
     let keyModel = KeyModel()
@@ -139,7 +144,7 @@ final class KeyboardState: ObservableObject {
     enum ComposeTarget: Equatable {
         case ai, refine, translate, calc, mcCommand, apiKey, baseURL, chatModel, personalContext, writingStyle
         case macroShortcut, macroText, profileName, profileContext(UUID), actionTitle, actionPrompt
-        case aiBehavior, learnedProfile, actionEdit(UUID), discordAnnounce
+        case aiBehavior, learnedProfile, actionEdit(UUID), discordAnnounce, memoryNote
         case clipEdit(UUID), clipNew, clipRename(UUID), clipFolderNew, clipFolderRename(String), clipSearch
 
         var placeholder: String {
@@ -162,6 +167,7 @@ final class KeyboardState: ObservableObject {
             case .actionPrompt: return "Anweisung an die KI"
             case .aiBehavior: return "Wie soll sich die KI verhalten? z. B. „Duze immer, kurz & locker“"
             case .learnedProfile: return "Was die KI über dich weiß …"
+            case .memoryNote: return "Was soll sich die KI merken?"
             case .actionEdit: return "Neue Anweisung für die Aktion"
             case .discordAnnounce: return "Worum geht die Ankündigung?"
             case .clipEdit: return "Eintrag bearbeiten …"
@@ -188,7 +194,7 @@ final class KeyboardState: ObservableObject {
             case .profileName: return "person.2"
             case .actionTitle, .actionPrompt, .actionEdit: return "wand.and.stars"
             case .aiBehavior: return "slider.horizontal.below.square.and.square.filled"
-            case .learnedProfile: return "brain.head.profile"
+            case .learnedProfile, .memoryNote: return "brain.head.profile"
             case .discordAnnounce: return "megaphone"
             case .clipEdit, .clipNew, .clipRename: return "doc.on.clipboard"
             case .clipFolderNew, .clipFolderRename: return "folder"
@@ -223,13 +229,13 @@ final class KeyboardState: ObservableObject {
 
     // Zwischenablage
     @Published var clips: [ClipItem] = []
-    private var lastChangeCount = -1
+    var lastChangeCount = -1
     private var clipTimer: Timer?
 
     // Tippen
     private var lastSpaceTime = Date.distantPast
     private var lastShiftTap = Date.distantPast
-    private var undoCorrection: (original: String, corrected: String, trailing: String)?
+    var undoCorrection: (original: String, corrected: String, trailing: String)?
     private var aiSuggestionTask: Task<Void, Never>?
     private var refreshWork: DispatchWorkItem?
     private var deleteTimer: Timer?
@@ -295,6 +301,7 @@ final class KeyboardState: ObservableObject {
                 }
             }
             self.engine.warmUp()
+            self.loadContactsIfNeeded()
             self.refreshSuggestionsNow()
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
@@ -312,6 +319,8 @@ final class KeyboardState: ObservableObject {
     }
 
     func disappear() {
+        finishDeletionBurst()
+        snapshotHistory()
         engine.save()
         if touchModelUpdates > 0 { saveTouchModel() }
         clipTimer?.invalidate()
@@ -467,6 +476,7 @@ final class KeyboardState: ObservableObject {
     // MARK: - Eingabe (schneller Pfad)
 
     func insert(_ text: String) {
+        finishDeletionBurst()
         if composeMode {
             composeText += text
             return
@@ -482,7 +492,14 @@ final class KeyboardState: ObservableObject {
     }
 
     func tapKey(_ key: String) {
-        let output = (shift != .off && layer == .letters) ? key.uppercased() : key
+        finishDeletionBurst()
+        var output = (shift != .off && layer == .letters) ? key.uppercased() : key
+        // Intelligente Interpunktion wie bei iOS: „…“ und ’
+        if store.smartPunctuation, !composeMode, (key == "\"" || key == "'"), !isCommandLine, !tokenIsSpecial {
+            let prev = before.last
+            let opening = prev == nil || prev!.isWhitespace || "([{„‚".contains(prev!)
+            if key == "\"" { output = opening ? "„" : "“" } else if !opening { output = "’" }
+        }
         if let sw = lastSwipe {
             lastSwipe = nil
             swipeAITask?.cancel()
@@ -527,11 +544,12 @@ final class KeyboardState: ObservableObject {
         }
         pendingTapPoint = nil
         if shift == .on { shift = .off }
-        if layer != .letters, output == "'" { layer = .letters }
+        if layer != .letters, key == "'" { layer = .letters }
         scheduleRefresh()
     }
 
     func tapSpace() {
+        finishDeletionBurst()
         lastSwipe = nil
         if composeMode { composeText += " "; return }
         let now = Date()
@@ -550,7 +568,11 @@ final class KeyboardState: ObservableObject {
     }
 
     func tapReturn() {
+        finishDeletionBurst()
         lastSwipe = nil
+        // Vor dem Senden: Text im Verlauf sichern (danach ist das Feld meist leer)
+        if !composeMode, returnTitle != "⏎" { snapshotHistory() }
+        if !composeMode { detectEvent(in: currentLine) }
         if composeMode {
             if composeTarget.isLongText { composeText += "\n"; return }
             sendCompose(); return
@@ -625,7 +647,7 @@ final class KeyboardState: ObservableObject {
         return !".!?\n:".contains(last)
     }
 
-    private var shouldAutocorrect: Bool {
+    var shouldAutocorrect: Bool {
         guard let proxy else { return true }
         if proxy.autocorrectionType == .no { return false }
         switch proxy.keyboardType ?? .default {
@@ -639,13 +661,13 @@ final class KeyboardState: ObservableObject {
         return true
     }
 
-    private func afterCommit() {
+    func afterCommit() {
         wordTaps = []
         wordsSincePrediction += 1
         if !liveEditing {
             let end = before.last.map { ".!?\n".contains($0) } ?? false
             scheduleContextCheck(sentenceEnd: end)
-            if end { collectSample() }
+            if end { collectSample(); detectEvent(in: lastSentence) }
         }
         if !liveEditing {
             wordsSinceCheck += 1
@@ -660,7 +682,7 @@ final class KeyboardState: ObservableObject {
         scheduleRefresh()
     }
 
-    private func deleteChars(_ n: Int) {
+    func deleteChars(_ n: Int) {
         for _ in 0..<max(0, n) { proxy?.deleteBackward() }
     }
 
@@ -674,6 +696,7 @@ final class KeyboardState: ObservableObject {
             lastSwipe = nil
             swipeAITask?.cancel()
             protectedSwipeWord = nil
+            captureDeleted(String(before.suffix(sw.word.count + (sw.addedSpace && before.dropLast(sw.word.count).hasSuffix(" ") ? 1 : 0))))
             deleteChars(sw.word.count + (sw.addedSpace && before.dropLast(sw.word.count).hasSuffix(" ") ? 1 : 0))
             feedback()
             updateAutoShift()
@@ -689,6 +712,8 @@ final class KeyboardState: ObservableObject {
             return
         }
         undoCorrection = nil
+        let sel = selected
+        if !sel.isEmpty { captureDeleted(sel) } else if let ch = before.last { captureDeleted(String(ch)) }
         proxy?.deleteBackward()
         if !wordTaps.isEmpty { wordTaps.removeLast() }
         updateAutoShift()
@@ -720,6 +745,7 @@ final class KeyboardState: ObservableObject {
     func stopDelete() {
         deleteTimer?.invalidate()
         deleteTimer = nil
+        updateRestoreOffer()
     }
 
     private func deleteWord() {
@@ -735,13 +761,14 @@ final class KeyboardState: ObservableObject {
             }
             count += 1
         }
+        captureDeleted(String(text.suffix(max(1, count))))
         deleteChars(max(1, count))
         scheduleRefresh()
     }
 
     func tapShift() {
         let now = Date()
-        if now.timeIntervalSince(lastShiftTap) < 0.3 {
+        if now.timeIntervalSince(lastShiftTap) < 0.3, store.capsLockEnabled {
             shift = .caps
         } else {
             shift = shift == .off ? .on : .off
@@ -879,6 +906,11 @@ final class KeyboardState: ObservableObject {
                 list.append(Suggestion(text: p, kind: .word))
             }
         }
+        list = addContactSuggestions(word: word, to: list)
+        if !store.showPredictions {
+            // Wie iOS „Vorschläge aus“: nur noch Korrekturen, Makros und Kontakte
+            list = list.filter { $0.kind == .correction || $0.kind == .macro || $0.kind == .contact }
+        }
         let newList = Array(list.prefix(3))
         if newList.map(\.text) != suggestions.map(\.text) || newList.map(\.kind) != suggestions.map(\.kind) {
             suggestions = newList
@@ -890,6 +922,8 @@ final class KeyboardState: ObservableObject {
     /// KI-Vorhersage für die Vorschlagsleiste (entprellt, mit Cache).
     private var wordsSincePrediction = 0
     private var lastPredictionContext = ""
+    /// Aktuellen Text als „schon vorhergesagt“ markieren (z. B. nach Antwortvorschlägen).
+    func markPredictionContext() { lastPredictionContext = before }
 
     /// KI denkt jetzt sofort mit (Knopf in der Leiste).
     func predictNow() {
@@ -1036,6 +1070,23 @@ final class KeyboardState: ObservableObject {
             }
             proxy?.insertText(s.text + " ")
             afterCommit()
+        case .contact:
+            if s.rest == "append" {
+                // Nummer/E-Mail hinter den Namen setzen
+                if let last = before.last, !last.isWhitespace { proxy?.insertText(" ") }
+                proxy?.insertText(s.text + " ")
+            } else {
+                deleteChars(currentWord.count)
+                proxy?.insertText(s.text + " ")
+            }
+            undoCorrection = nil
+            afterCommit()
+        case .reply:
+            if let last = before.last, !last.isWhitespace { proxy?.insertText(" ") }
+            proxy?.insertText(s.text)
+            bar.phrases = []
+            store.incrementStat("aiPhrases")
+            afterCommit()
         default:
             let word = currentWord
             let prev = previousWord
@@ -1067,7 +1118,7 @@ final class KeyboardState: ObservableObject {
 
     // MARK: - KI
 
-    private func requireAI() -> Bool {
+    func requireAI() -> Bool {
         if !hasFullAccess {
             showToast("Bitte „Vollen Zugriff“ für Tastatur KI erlauben.")
             return false
@@ -1081,7 +1132,7 @@ final class KeyboardState: ObservableObject {
 
     /// Wartet kurz, bis das Textfeld den neuen Kontext gemeldet hat.
     @MainActor
-    private func waitForContextChange(from old: String?) async {
+    func waitForContextChange(from old: String?) async {
         for _ in 0..<10 {
             try? await Task.sleep(nanoseconds: 12_000_000)
             if proxy?.documentContextBeforeInput != old { return }
@@ -1444,6 +1495,10 @@ final class KeyboardState: ObservableObject {
         case .aiBehavior:
             store.aiBehavior = text
             showToast(text.isEmpty ? "Eigene KI-Regeln entfernt" : "KI-Regeln gespeichert ✓")
+        case .memoryNote:
+            guard !text.isEmpty else { return }
+            store.memoryNotes.insert(String(text.prefix(300)), at: 0)
+            showToast("Gemerkt 🧠")
         case .learnedProfile:
             store.learnedProfile = text
             showToast(text.isEmpty ? "Gelerntes Profil gelöscht" : "Profil gespeichert ✓")
@@ -1480,6 +1535,7 @@ final class KeyboardState: ObservableObject {
                 case .selection, .none:
                     proxy.insertText(result)
                 case .all(let length):
+                    self.rememberBeforeAIReplace(self.aiOriginal, newText: result)
                     await self.replaceAll(with: result, expectedLength: length)
                 case .range(let b, let a):
                     if a > 0 {
@@ -1504,7 +1560,7 @@ final class KeyboardState: ObservableObject {
     /// Löscht den kompletten Text im Feld und setzt den neuen ein.
     /// Klappt das Löschen in Blöcken nicht, wird so lange „Löschen“ gedrückt, bis alles weg ist.
     @MainActor
-    private func replaceAll(with text: String, expectedLength: Int) async {
+    func replaceAll(with text: String, expectedLength: Int) async {
         await moveToEnd()
         let limit = max(expectedLength * 2 + 500, 20_000)
         var deleted = 0
@@ -1575,6 +1631,7 @@ final class KeyboardState: ObservableObject {
                     return
                 }
                 clips = store.addClip(s)
+                clipboardDidChange(s)
                 return
             }
         }
@@ -2486,10 +2543,27 @@ final class KeyboardState: ObservableObject {
                 self.store.defaults.set(0, forKey: "learn.newSamples")
                 if let result, !result.isEmpty {
                     self.store.learnedProfile = String(result.prefix(2500))
+                    self.learnMemories(from: list)
                     if !silent { self.showToast("Profil aktualisiert ✓") }
                 } else if !silent {
                     self.showToast("Lernen fehlgeschlagen – später nochmal.")
                 }
+            }
+        }
+    }
+
+    /// Generalüberblick: Die KI merkt sich wichtige, wiederkehrende Dinge (Projekte, Pläne, Vorlieben).
+    func learnMemories(from samples: [String]) {
+        guard store.memoryEnabled, hasFullAccess, store.hasAPIKey else { return }
+        let existing = store.memoryNotes
+        Task { [weak self] in
+            guard let self else { return }
+            let notes = (try? await self.client.extractMemories(samples: samples, existing: existing)) ?? []
+            await MainActor.run {
+                guard !notes.isEmpty else { return }
+                var merged = self.store.memoryNotes
+                for n in notes where !merged.contains(where: { $0.lowercased() == n.lowercased() }) { merged.append(n) }
+                self.store.memoryNotes = Array(merged.suffix(60))
             }
         }
     }
@@ -2836,6 +2910,12 @@ final class KeyboardState: ObservableObject {
         case "theme": randomTheme()
         case "settings": settingsPage = .main; toggle(.settings)
         case "hide": controller?.dismissKeyboard()
+        case "undo": undoLast()
+        case "reply": suggestReplies(manual: true)
+        case "history": toggle(.history)
+        case "location": insertLocation()
+        case "remember": rememberCurrent()
+        case "event": eventFromText()
         default:
             if let lang = ToolItem.translateLanguage(id) { translateField(to: lang, direct: true) }
         }
@@ -3001,6 +3081,7 @@ final class KeyboardState: ObservableObject {
         panel = panel == p ? .none : p
         if panel == .clipboard { reloadClips() }
         if panel == .stickers { reloadStickers() }
+        if panel == .history { reloadHistory() }
         onHeightChange?(totalHeight)
         if panel == .none { refreshSuggestionsNow() }
     }

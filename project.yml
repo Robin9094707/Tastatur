@@ -43,6 +43,12 @@ targets:
           - CFBundleURLName: de.tastatur.app
             CFBundleURLSchemes: [tastatur]
         CFBundleDevelopmentRegion: de
+        NSContactsUsageDescription: Damit die Tastatur Namen aus deinen Kontakten kennt und Nummern/E-Mails vorschlagen kann. Alles bleibt auf deinem iPhone.
+        NSLocationWhenInUseUsageDescription: Damit du deinen Standort mit einem Tipp aus der Tastatur senden kannst.
+        NSCalendarsWriteOnlyAccessUsageDescription: Damit Termine, die du schreibst, mit einem Tipp im Kalender landen.
+        NSCalendarsFullAccessUsageDescription: Damit Termine, die du schreibst, mit einem Tipp im Kalender landen.
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: de.tastatur.app
@@ -69,6 +75,9 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleDevelopmentRegion: de
+        NSLocationWhenInUseUsageDescription: Damit du deinen Standort mit einem Tipp aus der Tastatur senden kannst.
+        NSCalendarsWriteOnlyAccessUsageDescription: Damit Termine, die du schreibst, mit einem Tipp im Kalender landen.
+        NSCalendarsFullAccessUsageDescription: Damit Termine, die du schreibst, mit einem Tipp im Kalender landen.
         NSExtension:
           NSExtensionPointIdentifier: com.apple.keyboard-service
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).KeyboardViewController

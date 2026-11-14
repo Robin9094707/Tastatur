@@ -33,7 +33,7 @@ final class SharedStore: ObservableObject {
 
     static let defaultChatModel = "gpt-6-luna"
     static let fallbackModels = ["gpt-6-luna", "gpt-5.6-luna", "gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"]
-    static let settingsVersion = 10
+    static let settingsVersion = 11
 
     @Published var apiKey: String = "" { didSet { set(apiKey, "apiKey") } }
     /// API-Schlüssel vorübergehend deaktiviert (bleibt gespeichert).
@@ -136,6 +136,32 @@ final class SharedStore: ObservableObject {
     /// KI-Korrektur: "end" = in Tipp-Pausen den ganzen Text, "word" = Wort für Wort beim Tippen, "off"
     @Published var aiCorrectMode: String = "end" { didSet { set(aiCorrectMode, "aiCorrectMode") } }
 
+    // Wie bei der iOS-Tastatur
+    /// Umlaut-Tasten ausblenden (ä/ö/ü dann per Gedrückthalten auf a/o/u).
+    @Published var hideUmlauts: Bool = false { didSet { set(hideUmlauts, "hideUmlauts") } }
+    /// Feststelltaste (zweimal Umschalt).
+    @Published var capsLockEnabled: Bool = true { didSet { set(capsLockEnabled, "capsLockEnabled") } }
+    /// Intelligente Interpunktion: " → „ “ und ' → ’.
+    @Published var smartPunctuation: Bool = true { didSet { set(smartPunctuation, "smartPunctuation") } }
+    /// Wortvorschläge in der Leiste.
+    @Published var showPredictions: Bool = true { didSet { set(showPredictions, "showPredictions") } }
+    /// Leertaste gedrückt halten/wischen bewegt den Cursor.
+    @Published var spaceCursor: Bool = true { didSet { set(spaceCursor, "spaceCursor") } }
+    /// Telefonnummern, E-Mails, Links lernen.
+    @Published var learnPersonal: Bool = true { didSet { set(learnPersonal, "learnPersonal") } }
+
+    // Persönliche Daten (alles optional, nur lokal)
+    @Published var useContacts: Bool = false { didSet { set(useContacts, "useContacts") } }
+    @Published var calendarSuggest: Bool = true { didSet { set(calendarSuggest, "calendarSuggest") } }
+    @Published var useLocation: Bool = false { didSet { set(useLocation, "useLocation") } }
+    /// Schreibverlauf (lokal, max. 7 Tage) und „Gelöschtes wiederherstellen“.
+    @Published var writeHistory: Bool = true { didSet { set(writeHistory, "writeHistory") } }
+    /// Antwortvorschläge, wenn eine Nachricht kopiert wurde.
+    @Published var replySuggestions: Bool = true { didSet { set(replySuggestions, "replySuggestions") } }
+    /// KI-Gedächtnis: wichtige Dinge, die die KI sich merkt.
+    @Published var memoryEnabled: Bool = true { didSet { set(memoryEnabled, "memoryEnabled") } }
+    @Published var memoryNotes: [String] = [] { didSet { setCodable(memoryNotes, "memoryNotes") } }
+
     // Emojis
     @Published var emojiRecents: [String] = [] { didSet { setCodable(emojiRecents, "emojiRecents") } }
     @Published var emojiFavorites: [String] = ["❤️", "😂", "👍", "🙏", "🔥", "✨"] { didSet { setCodable(emojiFavorites, "emojiFavorites") } }
@@ -221,6 +247,19 @@ final class SharedStore: ObservableObject {
         upd(\.toolbarItems, getCodable("toolbarItems") ?? ToolItem.defaultOrder)
         upd(\.liveAICorrection, bool("liveAICorrection", true))
         upd(\.aiCorrectMode, d.string(forKey: "aiCorrectMode") ?? "end")
+        upd(\.hideUmlauts, bool("hideUmlauts", false))
+        upd(\.capsLockEnabled, bool("capsLockEnabled", true))
+        upd(\.smartPunctuation, bool("smartPunctuation", true))
+        upd(\.showPredictions, bool("showPredictions", true))
+        upd(\.spaceCursor, bool("spaceCursor", true))
+        upd(\.learnPersonal, bool("learnPersonal", true))
+        upd(\.useContacts, bool("useContacts", false))
+        upd(\.calendarSuggest, bool("calendarSuggest", true))
+        upd(\.useLocation, bool("useLocation", false))
+        upd(\.writeHistory, bool("writeHistory", true))
+        upd(\.replySuggestions, bool("replySuggestions", true))
+        upd(\.memoryEnabled, bool("memoryEnabled", true))
+        upd(\.memoryNotes, getCodable("memoryNotes") ?? [])
     }
 
     /// Setzt einen Wert nur, wenn er sich geändert hat (vermeidet unnötiges Neuzeichnen).
@@ -293,6 +332,13 @@ final class SharedStore: ObservableObject {
         }
         // v10: „Wort für Wort“ entfällt (bremste das Tippen) → „Am Ende“
         if version < 10, d.string(forKey: "aiCorrectMode") == "word" { d.set("end", forKey: "aiCorrectMode") }
+        // v11: Rückgängig, Verlauf, Antworten, Standort, Merken in die Schnellleiste
+        if version < 11, let data = d.data(forKey: "toolbarItems"), var items = try? JSONDecoder().decode([String].self, from: data) {
+            for (id, after) in [("undo", "fix"), ("reply", "undo"), ("history", "clipboard"), ("location", "history"), ("remember", "location")] where !items.contains(id) {
+                items.insert(id, at: items.firstIndex(of: after).map { $0 + 1 } ?? items.count)
+            }
+            if let newData = try? JSONEncoder().encode(items) { d.set(newData, forKey: "toolbarItems") }
+        }
         // v9: „Alles korrigieren“ direkt hinter die KI
         if version < 9, let data = d.data(forKey: "toolbarItems"), var items = try? JSONDecoder().decode([String].self, from: data) {
             if !items.contains("fix") { items.insert("fix", at: items.firstIndex(of: "ai").map { $0 + 1 } ?? 0) }

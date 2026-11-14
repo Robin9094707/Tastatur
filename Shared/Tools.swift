@@ -29,6 +29,12 @@ struct ToolItem: Identifiable, Hashable {
         ToolItem(id: "translateClip", title: "Ablage übersetzen", symbol: "doc.on.clipboard.fill"),
         ToolItem(id: "fix", title: "Korrigieren", symbol: "checkmark.seal"),
         ToolItem(id: "check", title: "Prüfen", symbol: "text.magnifyingglass"),
+        ToolItem(id: "undo", title: "Rückgängig", symbol: "arrow.uturn.backward"),
+        ToolItem(id: "reply", title: "Antworten", symbol: "bubble.left.and.text.bubble.right"),
+        ToolItem(id: "history", title: "Verlauf", symbol: "clock.arrow.circlepath"),
+        ToolItem(id: "location", title: "Standort", symbol: "location.fill"),
+        ToolItem(id: "remember", title: "Merken", symbol: "brain.head.profile"),
+        ToolItem(id: "event", title: "Termin", symbol: "calendar.badge.plus"),
         ToolItem(id: "discord", title: "Discord", symbol: "number.square"),
         ToolItem(id: "commands", title: "Befehle", symbol: "terminal"),
         ToolItem(id: "write", title: "Schreiben", symbol: "pencil.line"),
@@ -45,7 +51,7 @@ struct ToolItem: Identifiable, Hashable {
         ToolItem(id: "hide", title: "Ausblenden", symbol: "keyboard.chevron.compact.down"),
     ]
 
-    static let defaultOrder = ["ai", "fix", "check", "translate", "tr:Englisch", "commands", "discord", "write", "clipboard", "stickers", "emoji", "cursor", "calc", "macros", "paste", "settings", "hide"]
+    static let defaultOrder = ["ai", "fix", "undo", "reply", "check", "translate", "tr:Englisch", "commands", "discord", "write", "clipboard", "history", "location", "remember", "stickers", "emoji", "cursor", "calc", "macros", "paste", "settings", "hide"]
 
     static func item(_ id: String) -> ToolItem? {
         if let lang = translateLanguage(id) {

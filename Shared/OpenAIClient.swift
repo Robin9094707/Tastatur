@@ -225,6 +225,21 @@ final class OpenAIClient {
         return Prediction(rest: rest, phrase: phrases.first ?? "", words: Array(words.prefix(4)), phrases: Array(phrases.prefix(2)))
     }
 
+    /// Natürliche Übersetzung. Ist der Text schon in der Zielsprache, wird ins Deutsche übersetzt.
+    func translate(_ text: String, to target: String) async throws -> String {
+        let fallback = target == "Deutsch" ? "Englische" : "Deutsche"
+        let result = try await chat(messages: [
+            ChatMessage(role: "system", content: """
+            Du bist ein Übersetzer in einer Smartphone-Tastatur. Übersetze den Text natürlich und idiomatisch ins \(target) – so, wie ein Muttersprachler schreiben würde.
+            Behalte Ton (locker/formell), Emojis, Zeilenumbrüche, Namen, Zahlen und Links bei.
+            Ist der Text bereits auf \(target), übersetze ihn stattdessen ins \(fallback).
+            Gib NUR die Übersetzung zurück – ohne Anführungszeichen, Erklärungen oder Hinweise.
+            """),
+            ChatMessage(role: "user", content: text),
+        ], model: store.chatModel, stream: false, effort: "minimal")
+        return Self.cleanup(result)
+    }
+
     struct TypoFix {
         var wrong: String
         var right: String

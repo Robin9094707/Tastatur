@@ -33,7 +33,7 @@ final class SharedStore: ObservableObject {
 
     static let defaultChatModel = "gpt-6-luna"
     static let fallbackModels = ["gpt-6-luna", "gpt-5.6-luna", "gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"]
-    static let settingsVersion = 4
+    static let settingsVersion = 5
 
     @Published var apiKey: String = "" { didSet { set(apiKey, "apiKey") } }
     @Published var baseURL: String = "https://api.openai.com/v1" { didSet { set(baseURL, "baseURL") } }
@@ -83,6 +83,11 @@ final class SharedStore: ObservableObject {
     @Published var keyTextColorHex: String = "" { didSet { set(keyTextColorHex, "keyTextColorHex") } }
     @Published var keyFontDesign: String = "default" { didSet { set(keyFontDesign, "keyFontDesign") } }
     @Published var themeID: String = "" { didSet { set(themeID, "themeID") } }
+
+    // KI-Vorschläge: "manual" (Knopf), "occasional" (gelegentlich), "off"
+    @Published var aiSuggestMode: String = "manual" { didSet { set(aiSuggestMode, "aiSuggestMode") } }
+    @Published var translateTarget: String = "Englisch" { didSet { set(translateTarget, "translateTarget") } }
+    @Published var toolbarItems: [String] = ToolItem.defaultOrder { didSet { setCodable(toolbarItems, "toolbarItems") } }
 
     // Tippkontrolle
     @Published var smartTouch: Bool = true { didSet { set(smartTouch, "smartTouch") } }
@@ -144,6 +149,9 @@ final class SharedStore: ObservableObject {
         upd(\.keyFontDesign, d.string(forKey: "keyFontDesign") ?? "default")
         upd(\.themeID, d.string(forKey: "themeID") ?? "")
         upd(\.smartTouch, bool("smartTouch", true))
+        upd(\.aiSuggestMode, d.string(forKey: "aiSuggestMode") ?? "manual")
+        upd(\.translateTarget, d.string(forKey: "translateTarget") ?? "Englisch")
+        upd(\.toolbarItems, getCodable("toolbarItems") ?? ToolItem.defaultOrder)
         upd(\.liveAICorrection, bool("liveAICorrection", true))
     }
 
@@ -161,6 +169,20 @@ final class SharedStore: ObservableObject {
         backgroundVersion += 1
         backgroundStyle = "image"
     }
+
+    // MARK: - Status der Tastatur (für die App)
+
+    func reportKeyboardStatus(fullAccess: Bool) {
+        defaults.set(fullAccess, forKey: "kb.fullAccess")
+        defaults.set(Date().timeIntervalSince1970, forKey: "kb.lastSeen")
+    }
+
+    var keyboardLastSeen: Date? {
+        let t = defaults.double(forKey: "kb.lastSeen")
+        return t > 0 ? Date(timeIntervalSince1970: t) : nil
+    }
+
+    var keyboardHasFullAccess: Bool { defaults.bool(forKey: "kb.fullAccess") }
 
     // MARK: - Emojis
 
@@ -196,6 +218,7 @@ final class SharedStore: ObservableObject {
         }
         if let scope = d.string(forKey: "aiScope"), AIScope(rawValue: scope) == nil { d.removeObject(forKey: "aiScope") }
         if version < 3 { d.set(true, forKey: "aiSuggestions") }
+        if version < 5 { d.set("manual", forKey: "aiSuggestMode") }
         for key in ["transcribeModel", "dictationLanguage", "dictationCleanup", "dictationVocabulary", "dictationSessionMinutes"] {
             d.removeObject(forKey: key)
         }

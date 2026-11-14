@@ -593,6 +593,7 @@ struct KeyboardSettingsPanel: View {
                     case .typing: typingPage
                     case .macros: macrosPage
                     case .actions: actionsPage
+                    case .toolbar: toolbarPage
                     }
                 }
                 .padding(10)
@@ -610,6 +611,7 @@ struct KeyboardSettingsPanel: View {
         case .typing: return "Tippen"
         case .macros: return "Makros"
         case .actions: return "KI-Aktionen"
+        case .toolbar: return "Schnellleiste"
         }
     }
 
@@ -631,6 +633,7 @@ struct KeyboardSettingsPanel: View {
                 navTile("Tippen", "keyboard", store.autocorrect ? "Autokorrektur an" : "Autokorrektur aus", .typing)
                 navTile("Makros", "text.badge.star", "\(store.macros.count) Makros", .macros)
                 navTile("KI-Aktionen", "wand.and.stars", "\(store.actions.filter(\.enabled).count) aktiv", .actions)
+                navTile("Schnellleiste", "rectangle.grid.1x2", "\(store.toolbarItems.count) Werkzeuge", .toolbar)
             }
             HStack {
                 actionButton("Text kopieren", "doc.on.doc") { state.copyAll() }
@@ -665,10 +668,15 @@ struct KeyboardSettingsPanel: View {
                 }
             }
             grid {
-                toggle("KI-Vorschläge", "sparkles", $store.aiSuggestions)
                 toggle("Live-Korrektur", "checkmark.seal", $store.liveAICorrection)
                 toggle("Live-Antwort", "text.cursor", $store.streamResponses)
                 toggle("Umfeld senden", "text.viewfinder", $store.useAppContext)
+            }
+            Text("KI-Vorschläge in der Leiste").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                chip("Auf Knopfdruck ✨", selected: store.aiSuggestMode == "manual") { store.aiSuggestMode = "manual" }
+                chip("Gelegentlich", selected: store.aiSuggestMode == "occasional") { store.aiSuggestMode = "occasional" }
+                chip("Aus", selected: store.aiSuggestMode == "off") { store.aiSuggestMode = "off" }
             }
             Text("Antwortsprache").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             HStack(spacing: 6) {
@@ -885,6 +893,64 @@ struct KeyboardSettingsPanel: View {
         }
     }
 
+    private var toolbarPage: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Aktiv – in dieser Reihenfolge").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            ForEach(Array(store.toolbarItems.enumerated()), id: \.element) { index, id in
+                if let item = ToolItem.item(id) {
+                    HStack(spacing: 10) {
+                        Image(systemName: item.symbol).foregroundStyle(state.tint).frame(width: 22)
+                        Text(item.title).font(.footnote.weight(.semibold))
+                        Spacer()
+                        Button { moveTool(index, -1) } label: { Image(systemName: "chevron.up.circle.fill") }
+                            .buttonStyle(.plain).disabled(index == 0).opacity(index == 0 ? 0.3 : 1)
+                        Button { moveTool(index, 1) } label: { Image(systemName: "chevron.down.circle.fill") }
+                            .buttonStyle(.plain).disabled(index == store.toolbarItems.count - 1).opacity(index == store.toolbarItems.count - 1 ? 0.3 : 1)
+                        Button {
+                            store.toolbarItems.removeAll { $0 == id }
+                            state.feedback()
+                        } label: { Image(systemName: "minus.circle.fill").foregroundStyle(.red) }
+                        .buttonStyle(.plain)
+                    }
+                    .font(.title3)
+                    .padding(8)
+                    .glass(cornerRadius: 10)
+                }
+            }
+            let hidden = ToolItem.all.filter { !store.toolbarItems.contains($0.id) }
+            if !hidden.isEmpty {
+                Text("Verfügbar").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                ForEach(hidden) { item in
+                    Button {
+                        store.toolbarItems.append(item.id)
+                        state.feedback()
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: item.symbol).frame(width: 22)
+                            Text(item.title).font(.footnote.weight(.semibold))
+                            Spacer()
+                            Image(systemName: "plus.circle.fill").font(.title3).foregroundStyle(.green)
+                        }
+                        .padding(8)
+                        .glass(cornerRadius: 10)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Button("Standard wiederherstellen") { store.toolbarItems = ToolItem.defaultOrder }
+                .font(.caption)
+        }
+    }
+
+    private func moveTool(_ index: Int, _ delta: Int) {
+        var items = store.toolbarItems
+        let target = index + delta
+        guard items.indices.contains(index), items.indices.contains(target) else { return }
+        items.swapAt(index, target)
+        store.toolbarItems = items
+        state.feedback()
+    }
+
     // MARK: Bausteine
 
     private var maskedKey: String {
@@ -1038,5 +1104,152 @@ struct LearnedTokensView: View {
             }
         }
         .onAppear { items = state.engine.allTokens }
+    }
+}
+
+// MARK: - Sticker
+
+struct StickerPanel: View {
+    @ObservedObject var state: KeyboardState
+    @State private var thumbs: [URL: UIImage] = [:]
+
+    var body: some View {
+        ScrollView {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
+                Button { state.addStickerFromClipboard() } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: "plus").font(.title2.weight(.semibold))
+                        Text("Aus Ablage").font(.system(size: 10, weight: .semibold))
+                    }
+                    .foregroundStyle(state.tint)
+                    .frame(maxWidth: .infinity, minHeight: 74)
+                    .glass(cornerRadius: 14, interactive: true)
+                }
+                .buttonStyle(.plain)
+                ForEach(state.stickers, id: \.self) { url in
+                    StickerCell(url: url, image: thumbs[url]) {
+                        state.copySticker(url)
+                    } onDelete: {
+                        state.deleteSticker(url)
+                    }
+                    .onAppear {
+                        if thumbs[url] == nil {
+                            DispatchQueue.global(qos: .userInitiated).async {
+                                let img = StickerStore.thumbnail(url)
+                                DispatchQueue.main.async { thumbs[url] = img }
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(8)
+            if state.stickers.isEmpty {
+                Text("Noch keine Sticker. Kopiere ein Bild und tippe auf „Aus Ablage“ – oder lege in der App Sticker mit automatischem Freistellen an.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 20)
+            } else {
+                Text("Tippen = kopieren, dann im Chat einfügen · Gedrückt halten = löschen")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .padding(.bottom, 6)
+            }
+        }
+        .onAppear { state.reloadStickers() }
+    }
+}
+
+private struct StickerCell: View {
+    let url: URL
+    let image: UIImage?
+    let onTap: () -> Void
+    let onDelete: () -> Void
+    @State private var confirm = false
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Group {
+                if let image {
+                    Image(uiImage: image).resizable().scaledToFit()
+                } else {
+                    ProgressView()
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 74, maxHeight: 74)
+            .padding(4)
+            .glass(cornerRadius: 14, interactive: true)
+            .onTapGesture {
+                if confirm { onDelete() } else { onTap() }
+                confirm = false
+            }
+            .onLongPressGesture(minimumDuration: 0.45) { confirm = true }
+            if confirm {
+                Image(systemName: "trash.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(.white, .red)
+                    .padding(2)
+            }
+        }
+    }
+}
+
+// MARK: - Cursor & Text
+
+struct CursorPanel: View {
+    @ObservedObject var state: KeyboardState
+    @State private var lastStep = 0
+
+    var body: some View {
+        VStack(spacing: 8) {
+            // Trackpad: wischen bewegt den Cursor
+            ZStack {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.primary.opacity(0.05))
+                VStack(spacing: 4) {
+                    Image(systemName: "hand.draw").font(.title2).foregroundStyle(state.tint)
+                    Text("Wischen bewegt den Cursor").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .glass(cornerRadius: 18)
+            .gesture(
+                DragGesture(minimumDistance: 4)
+                    .onChanged { v in
+                        let step = Int(v.translation.width / 9) + Int(v.translation.height / 18) * 12
+                        if step != lastStep {
+                            state.moveCursor(step - lastStep)
+                            lastStep = step
+                        }
+                    }
+                    .onEnded { _ in lastStep = 0; state.cursorMoveEnded() }
+            )
+            HStack(spacing: 6) {
+                key("arrow.left.to.line", "Anfang") { state.cursorAction(.start) }
+                key("chevron.left.2", "Wort") { state.cursorAction(.wordLeft) }
+                key("chevron.left", "") { state.cursorAction(.left) }
+                key("chevron.right", "") { state.cursorAction(.right) }
+                key("chevron.right.2", "Wort") { state.cursorAction(.wordRight) }
+                key("arrow.right.to.line", "Ende") { state.cursorAction(.end) }
+            }
+            HStack(spacing: 6) {
+                key("delete.left", "Wort löschen") { state.cursorAction(.deleteWord) }
+                key("doc.on.doc", "Alles kopieren") { state.copyAll() }
+                key("doc.on.clipboard", "Einfügen") { state.pasteCurrent() }
+                key("keyboard", "Tasten") { state.toggle(.cursor) }
+            }
+        }
+        .padding(8)
+    }
+
+    private func key(_ symbol: String, _ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 2) {
+                Image(systemName: symbol).font(.system(size: 15, weight: .semibold))
+                if !title.isEmpty { Text(title).font(.system(size: 9, weight: .semibold)).lineLimit(1) }
+            }
+            .frame(maxWidth: .infinity, minHeight: 42)
+            .glass(cornerRadius: 12, interactive: true)
+        }
+        .buttonStyle(.plain)
     }
 }

@@ -14,6 +14,8 @@ enum Panel: Equatable {
     case macros
     case emoji
     case settings
+    case stickers
+    case cursor
 }
 
 struct Suggestion: Identifiable, Equatable {
@@ -122,13 +124,15 @@ final class KeyboardState: ObservableObject {
 
     /// Wohin die Eingabe im Eingabe-Modus geht (KI-Auftrag oder eine Einstellung).
     enum ComposeTarget: Equatable {
-        case ai, refine, apiKey, baseURL, chatModel, personalContext, writingStyle
+        case ai, refine, translate, calc, apiKey, baseURL, chatModel, personalContext, writingStyle
         case macroShortcut, macroText, profileName, profileContext(UUID), actionTitle, actionPrompt
 
         var placeholder: String {
             switch self {
             case .ai: return "Was soll die KI schreiben?"
             case .refine: return "Wie soll das Ergebnis geändert werden?"
+            case .translate: return "Tippe in deiner Sprache …"
+            case .calc: return "Rechnung, z. B. 12,5*4+3"
             case .apiKey: return "OpenAI-API-Schlüssel (sk-…)"
             case .baseURL: return "API-Adresse (https://…/v1)"
             case .chatModel: return "Modellname, z. B. gpt-6-luna"
@@ -147,6 +151,8 @@ final class KeyboardState: ObservableObject {
             switch self {
             case .ai: return "sparkles"
             case .refine: return "slider.horizontal.3"
+            case .translate: return "character.bubble"
+            case .calc: return "plus.forwardslash.minus"
             case .apiKey: return "key.fill"
             case .baseURL: return "server.rack"
             case .chatModel: return "cpu"
@@ -157,11 +163,11 @@ final class KeyboardState: ObservableObject {
             }
         }
 
-        var isSetting: Bool { self != .ai && self != .refine }
+        var isSetting: Bool { self != .ai && self != .refine && self != .translate && self != .calc }
     }
 
-    enum SettingsPage: Equatable { case main, ai, context, design, typing, macros, actions }
-    @Published var composeText = ""
+    enum SettingsPage: Equatable { case main, ai, context, design, typing, macros, actions, toolbar }
+    @Published var composeText = "" { didSet { if composeText != oldValue { composeDidChange() } } }
     private var lastRun: (() -> Void)?
     private var aiTask: Task<Void, Never>?
     private(set) var replaceTarget: ReplaceTarget = .none
@@ -185,7 +191,7 @@ final class KeyboardState: ObservableObject {
 
     var onHeightChange: ((CGFloat) -> Void)?
 
-    let toolbarHeight: CGFloat = 48
+    var toolbarHeight: CGFloat { composeMode && composeTarget == .translate ? 96 : 48 }
     var keyRowHeight: CGFloat {
         let size = controller?.view.window?.windowScene?.screen.bounds.size ?? UIScreen.main.bounds.size
         let landscape = size.width > size.height
@@ -212,6 +218,7 @@ final class KeyboardState: ObservableObject {
         sourceMode = store.aiScope
         hasFullAccess = controller?.hasFullAccess ?? false
         needsGlobe = controller?.needsInputModeSwitchKey ?? true
+        store.reportKeyboardStatus(fullAccess: hasFullAccess)
         onHeightChange?(totalHeight)
         updateReturnKey()
         updateAutoShift()
@@ -475,10 +482,11 @@ final class KeyboardState: ObservableObject {
     }
 
     private func afterCommit() {
+        wordsSincePrediction += 1
         if !liveEditing {
             wordsSinceCheck += 1
             let last = before.last
-            if wordsSinceCheck >= 3 || (last != nil && ".!?\n".contains(last!)) && wordsSinceCheck >= 1 {
+            if wordsSinceCheck >= 8 || (last != nil && ".!?\n".contains(last!)) && wordsSinceCheck >= 1 {
                 liveCheckPending = true
             }
         }
@@ -613,6 +621,7 @@ final class KeyboardState: ObservableObject {
 
     func refreshSuggestionsNow() {
         aiSuggestionTask?.cancel()
+        aiThinking = false
         if composeMode || (panel != .none && panel != .tools) { return }
         let word = currentWord
         var list: [Suggestion] = []
@@ -653,12 +662,42 @@ final class KeyboardState: ObservableObject {
     }
 
     /// KI-Vorhersage für die Vorschlagsleiste (entprellt, mit Cache).
-    private func requestPrediction() {
-        guard store.aiSuggestions, hasFullAccess, store.hasAPIKey, !composeMode else {
-            if aiPhrase != nil { aiPhrase = nil }
+    private var wordsSincePrediction = 0
+    private var lastPredictionContext = ""
+
+    /// KI denkt jetzt sofort mit (Knopf in der Leiste).
+    func predictNow() {
+        guard hasFullAccess, store.hasAPIKey else {
+            showToast(hasFullAccess ? "Kein API-Schlüssel – ✨ → Einstellungen → KI & API" : "Bitte „Vollen Zugriff“ erlauben.")
             return
         }
+        feedback(.medium)
+        refreshWork?.cancel()
+        requestPrediction(force: true)
+    }
+
+    private func requestPrediction(force: Bool = false) {
+        // Veraltete KI-Vorschläge entfernen, sobald weitergetippt wurde
+        if !force, before != lastPredictionContext, aiPhrase != nil { aiPhrase = nil }
+        guard store.aiSuggestMode != "off", hasFullAccess, store.hasAPIKey, !composeMode else {
+            if aiPhrase != nil { aiPhrase = nil }
+            aiThinking = false
+            return
+        }
+        if !force {
+            // Nur „gelegentlich“: an Wortgrenzen, nach einigen Wörtern oder am Satzende
+            guard store.aiSuggestMode == "occasional" else { aiThinking = false; return }
+            let last = before.last
+            let atBoundary = last == " " || last == "\n"
+            let sentenceEnd = before.trimmingCharacters(in: .whitespaces).last.map { ".!?".contains($0) } ?? false
+            guard atBoundary, wordsSincePrediction >= 6 || (sentenceEnd && wordsSincePrediction >= 2) else {
+                aiThinking = false
+                return
+            }
+        }
+        wordsSincePrediction = 0
         let context = before
+        lastPredictionContext = context
         let trimmed = context.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 3 else {
             if aiPhrase != nil { aiPhrase = nil }
@@ -672,8 +711,9 @@ final class KeyboardState: ObservableObject {
         }
         if aiPhrase != nil { aiPhrase = nil }
         aiThinking = true
+        let delay: UInt64 = force ? 0 : 1_200_000_000
         aiSuggestionTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 320_000_000)
+            if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
             guard !Task.isCancelled, let self else { return }
             let prediction = try? await self.client.predict(context: context)
             await MainActor.run {
@@ -1020,7 +1060,11 @@ final class KeyboardState: ObservableObject {
         default: lowerStart = !prefill.isEmpty
         }
         shift = lowerStart ? .off : .on
+        if target == .calc { layer = .numbers; shift = .off }
+        translatePreview = ""
+        calcResult = ""
         updateReturnKey()
+        onHeightChange?(totalHeight)
     }
 
     func cancelCompose() {
@@ -1031,11 +1075,17 @@ final class KeyboardState: ObservableObject {
         updateReturnKey()
         if target == .refine, !aiResult.isEmpty { panel = .result }
         if target.isSetting { panel = .settings }
+        translateTask?.cancel()
+        translatePreview = ""
+        showLanguagePicker = false
+        onHeightChange?(totalHeight)
         updateAutoShift()
         scheduleRefresh()
     }
 
     func sendCompose() {
+        if composeTarget == .translate { insertTranslation(); return }
+        if composeTarget == .calc { insertCalcResult(); return }
         let raw = composeText
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let target = composeTarget
@@ -1111,7 +1161,7 @@ final class KeyboardState: ObservableObject {
             store.actions.append(AIAction(title: pendingMacroShortcut, symbol: "wand.and.stars", prompt: text))
             showToast("KI-Aktion „\(pendingMacroShortcut)“ angelegt ✓")
             pendingMacroShortcut = ""
-        case .ai, .refine:
+        case .ai, .refine, .translate, .calc:
             break
         }
     }
@@ -1458,6 +1508,239 @@ final class KeyboardState: ObservableObject {
         }
     }
 
+    // MARK: - Übersetzungsmodus
+
+    @Published var translatePreview = ""
+    @Published var translating = false
+    @Published var showLanguagePicker = false
+    @Published var calcResult = ""
+    private var translateTask: Task<Void, Never>?
+
+    func startTranslateMode() {
+        guard requireAI() else { return }
+        beginInput(.translate)
+    }
+
+    private func composeDidChange() {
+        switch composeTarget {
+        case .translate: scheduleTranslation()
+        case .calc:
+            calcResult = Calculator.evaluate(composeText).map(Calculator.format) ?? ""
+        default: break
+        }
+    }
+
+    private func scheduleTranslation(immediate: Bool = false) {
+        translateTask?.cancel()
+        let text = composeText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { translatePreview = ""; translating = false; return }
+        translating = true
+        let target = store.translateTarget
+        translateTask = Task { [weak self] in
+            if !immediate { try? await Task.sleep(nanoseconds: 550_000_000) }
+            guard !Task.isCancelled, let self else { return }
+            let result = try? await self.client.translate(text, to: target)
+            await MainActor.run {
+                guard !Task.isCancelled else { return }
+                self.translating = false
+                if let result, self.composeText.trimmingCharacters(in: .whitespacesAndNewlines) == text {
+                    self.translatePreview = result
+                }
+            }
+        }
+    }
+
+    func setTranslateTarget(_ lang: String) {
+        store.translateTarget = lang
+        showLanguagePicker = false
+        feedback()
+        if composeMode, composeTarget == .translate { scheduleTranslation(immediate: true) }
+    }
+
+    /// Fügt die Übersetzung ein und bleibt im Übersetzungsmodus (für Chats).
+    private func insertTranslation() {
+        let text = composeText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { cancelCompose(); return }
+        let target = store.translateTarget
+        let ready = !translating && !translatePreview.isEmpty
+        let insertNow: (String) -> Void = { [weak self] result in
+            guard let self else { return }
+            var t = result
+            if let last = self.before.last, !last.isWhitespace { t = " " + t }
+            self.proxy?.insertText(t)
+            self.composeText = ""
+            self.translatePreview = ""
+            self.feedback(.medium)
+            self.store.incrementStat("translations")
+        }
+        if ready { insertNow(translatePreview); return }
+        translating = true
+        translateTask?.cancel()
+        Task { [weak self] in
+            guard let self else { return }
+            let result = try? await self.client.translate(text, to: target)
+            await MainActor.run {
+                self.translating = false
+                if let result { insertNow(result) } else { self.showToast("Übersetzung fehlgeschlagen") }
+            }
+        }
+    }
+
+    /// Kopierten Text übersetzen und als Ergebnis anzeigen.
+    func translateClipboard() {
+        guard requireAI() else { return }
+        guard let text = UIPasteboard.general.string, !text.isEmpty else {
+            showToast("Die Zwischenablage ist leer.")
+            return
+        }
+        let target = store.translateTarget
+        runAI(title: "Übersetzung → \(Languages.flag(target)) \(target)", original: text, target: .none, showDiff: false) { [client = self.client] partial in
+            let r = try await client.translate(text, to: target)
+            partial(r)
+            return r
+        }
+    }
+
+    // MARK: - Rechner
+
+    func startCalculator() { beginInput(.calc) }
+
+    private func insertCalcResult() {
+        let result = calcResult
+        composeMode = false
+        composeTarget = .ai
+        composeText = ""
+        updateReturnKey()
+        onHeightChange?(totalHeight)
+        layer = .letters
+        guard !result.isEmpty else { return }
+        var t = result
+        if let last = before.last, !last.isWhitespace { t = " " + t }
+        proxy?.insertText(t)
+        feedback(.medium)
+        afterCommit()
+    }
+
+    // MARK: - Werkzeuge der Schnellleiste
+
+    func runTool(_ id: String) {
+        switch id {
+        case "ai": toggle(.ai)
+        case "translate": startTranslateMode()
+        case "translateClip": translateClipboard()
+        case "write": startCompose()
+        case "clipboard": toggle(.clipboard)
+        case "stickers": toggle(.stickers)
+        case "emoji": toggle(.emoji)
+        case "macros": toggle(.macros)
+        case "cursor": toggle(.cursor)
+        case "calc": startCalculator()
+        case "paste": pasteCurrent()
+        case "copyAll": copyAll()
+        case "theme": randomTheme()
+        case "settings": settingsPage = .main; toggle(.settings)
+        case "hide": controller?.dismissKeyboard()
+        default: break
+        }
+    }
+
+    // MARK: - Cursor-Steuerung
+
+    enum CursorAction { case left, right, wordLeft, wordRight, start, end, deleteWord, selectHint }
+
+    func cursorAction(_ a: CursorAction) {
+        feedback()
+        switch a {
+        case .left: moveCursor(-1)
+        case .right: moveCursor(1)
+        case .wordLeft:
+            let b = before
+            var n = 0
+            var seen = false
+            for ch in b.reversed() {
+                if ch.isLetter || ch.isNumber { seen = true } else if seen { break }
+                n += String(ch).utf16.count
+            }
+            moveCursor(-max(1, n))
+        case .wordRight:
+            let a = after
+            var n = 0
+            var seen = false
+            for ch in a {
+                if ch.isLetter || ch.isNumber { seen = true } else if seen { break }
+                n += String(ch).utf16.count
+            }
+            moveCursor(max(1, n))
+        case .start:
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                for _ in 0..<500 {
+                    let b = self.before
+                    if b.isEmpty { break }
+                    self.proxy?.adjustTextPosition(byCharacterOffset: -b.utf16.count)
+                    await self.waitForContextChange(from: b)
+                }
+            }
+        case .end:
+            Task { @MainActor [weak self] in await self?.moveToEnd() }
+        case .deleteWord:
+            deleteWord()
+        case .selectHint:
+            showToast("Tipp: Wische über die Leertaste, um den Cursor zu bewegen.")
+        }
+        scheduleRefresh()
+    }
+
+    // MARK: - Sticker
+
+    @Published var stickers: [URL] = []
+
+    func reloadStickers() {
+        stickers = StickerStore.list()
+    }
+
+    /// Kopiert den Sticker – danach im Chat einfach einfügen.
+    func copySticker(_ url: URL) {
+        guard hasFullAccess else {
+            showToast("Dafür „Vollen Zugriff“ erlauben.")
+            return
+        }
+        guard let data = try? Data(contentsOf: url) else { return }
+        UIPasteboard.general.setData(data, forPasteboardType: "public.png")
+        lastChangeCount = UIPasteboard.general.changeCount
+        feedback(.medium)
+        showToast("Sticker kopiert – jetzt im Chat einfügen 📋")
+    }
+
+    func addStickerFromClipboard() {
+        guard hasFullAccess else {
+            showToast("Dafür „Vollen Zugriff“ erlauben.")
+            return
+        }
+        let pb = UIPasteboard.general
+        var raw: Data?
+        for t in ["public.png", "public.heic", "public.jpeg", "public.tiff", "public.image"] {
+            if let d = pb.data(forPasteboardType: t) { raw = d; break }
+        }
+        guard let data = raw else {
+            showToast("Kopiere zuerst ein Bild oder einen Sticker.")
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let url = StickerStore.add(imageData: data)
+            DispatchQueue.main.async {
+                self?.reloadStickers()
+                self?.showToast(url == nil ? "Bild konnte nicht gelesen werden." : "Sticker gespeichert ✓")
+            }
+        }
+    }
+
+    func deleteSticker(_ url: URL) {
+        StickerStore.delete(url)
+        reloadStickers()
+        showToast("Sticker gelöscht")
+    }
+
     // MARK: - Design aus der Tastatur
 
     /// Setzt ein kopiertes Bild als Hintergrund (Tastaturen dürfen die Fotomediathek nicht öffnen).
@@ -1520,6 +1803,7 @@ final class KeyboardState: ObservableObject {
         if panel == .result, p == .result, aiBusy { cancelAI() }
         panel = panel == p ? .none : p
         if panel == .clipboard { reloadClips() }
+        if panel == .stickers { reloadStickers() }
         if panel == .none { refreshSuggestionsNow() }
     }
 

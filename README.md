@@ -3,15 +3,16 @@
 KI-Tastatur für iOS mit eigenem OpenAI-API-Schlüssel – komplett auf Deutsch, im Liquid-Glass-Design.
 
 ## Funktionen
-- **Schnelle UIKit-Tastatur** (QWERTZ) mit Multitouch, Tasten-Vorschau, Akzent-Auswahl per Wischen (s → ß), Zahlen/Symbolen, Emojis, Cursor-Steuerung über die Leertaste, Haptik und Klick-Ton
-- **Autokorrektur** (mit ⌫ rückgängig), **Autovervollständigung** und **Wortvorhersage**, lernt deine Wörter, optional **KI-Wortvorschläge**
-- **KI-Aktionen** direkt in der Tastatur, in Kategorien: Formatieren (E-Mail, Nachricht, Liste, Absätze, Überschriften + Sofort-Formatierung ohne KI), Zusammenfassen (Kurz, Ausführlich, Stichpunkte, TL;DR, To-dos), Bearbeiten (Korrigieren mit markierten Änderungen, Verbessern, Umformulieren, Kürzen, Ausbauen, Gliedern, Antworten, Erklären), Ton, Übersetzen + **eigene Aktionen**
-- **Große Texte**: Die Tastatur liest den kompletten Text im Feld ein (nicht nur den sichtbaren Ausschnitt). Sehr lange Texte werden in Abschnitten verarbeitet. Quelle wählbar: Feld, Absatz oder Zwischenablage
-- **Live-Antworten** (Streaming), **Verfeinern** (Kürzer, Formeller, eigene Anweisung …), Ersetzen/Einfügen/Kopieren
-- **Eigener Kontext**: „Über mich“, Schreibstil, Profile (Arbeit/Privat …)
-- **Makros/Textbausteine** mit Auto-Ersetzen (`mfg` + Leertaste), Platzhaltern und KI-Makros
-- **Zwischenablage-Verlauf** mit Anheften und Ein-Tipp-Zusammenfassung
-- Standardmodell **GPT-6 Luna** (günstigstes und neuestes Modell, ~0,10 $ / 0,50 $ pro 1 Mio. Tokens) mit automatischem Fallback
+- **Alles in der Tastatur:** Designs, KI, Übersetzen, Makros, Schnellleiste und alle Optionen über ⊞ → Einstellungen – funktioniert auch ohne App Group
+- **Übersetzungsmodus:** in deiner Sprache tippen, Live-Übersetzung in 20 Sprachen, mit ↑ einfügen; kopierten Text übersetzen
+- **Anpassbare Schnellleiste:** Werkzeuge wählen und sortieren (KI, Übersetzen, Ablage, Sticker, Emoji, Cursor-Trackpad, Rechner, Makros …)
+- **Sticker:** in der App aus Fotos erstellen (Motiv wird automatisch freigestellt) oder aus der Zwischenablage; in der Tastatur antippen → einfügen
+- **KI-Vorschläge auf Knopfdruck** (✨ in der Leiste) oder gelegentlich – keine Anfrage bei jedem Tastendruck
+- **Schnelle UIKit-Tastatur** mit Tasten-Vorschau, Akzent-Auswahl, intelligenten Trefferzonen, tastaturgewichteter Autokorrektur und KI-Live-Korrektur
+- **Lernt dich kennen:** Wörter, Wortfolgen, E-Mail-Adressen, Links und Nummern
+- **KI-Aktionen:** Zusammenfassen, Korrigieren (mit Markierung), Formatieren, Ton, Übersetzen – auch für sehr lange Texte, mit Live-Antworten
+- **21 Themes, 7 Tastenstile**, eigene Farben, Schriftarten und Hintergrundbilder
+- Standardmodell **GPT-6 Luna** mit automatischem Fallback
 
 ## Installation
 1. Unter **Actions → IPA bauen** das Artefakt `Tastatur-KI-ipa` herunterladen.

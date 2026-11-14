@@ -1,4 +1,5 @@
 import UIKit
+import Combine
 import SwiftUI
 import AudioToolbox
 
@@ -34,7 +35,17 @@ struct Suggestion: Identifiable, Equatable {
 
 /// Nur die Vorschlagsleiste beobachtet dieses Modell – Tippen zeichnet so nicht die ganze Tastatur neu.
 final class BarModel: ObservableObject {
-    @Published var suggestions: [Suggestion] = []
+    /// Vorschläge – absichtlich NICHT @Published: Die UIKit-Leiste abonniert `suggestionStream` direkt.
+    /// SwiftUI zeichnet nur neu, wenn die Leiste ihre Form wechselt (`manySuggestions`).
+    var suggestions: [Suggestion] = [] {
+        didSet {
+            suggestionStream.send(suggestions)
+            let many = suggestions.count > 3
+            if many != manySuggestions { manySuggestions = many }
+        }
+    }
+    let suggestionStream = CurrentValueSubject<[Suggestion], Never>([])
+    @Published private(set) var manySuggestions = false
     @Published var phrases: [Suggestion] = []
     @Published var thinking = false
     @Published var liveFix: KeyboardState.LiveFix?
@@ -3177,6 +3188,7 @@ final class KeyboardState: ObservableObject {
     // MARK: - Panels
 
     func toggle(_ p: Panel) {
+        TypingMetrics.shared.lastWork = "Panel wechseln"
         feedback()
         if composeMode { cancelCompose() }
         if panel == .result, p == .result, aiBusy { cancelAI() }

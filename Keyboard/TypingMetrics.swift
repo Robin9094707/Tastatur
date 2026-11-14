@@ -29,7 +29,10 @@ final class TypingMetrics: ObservableObject {
     var lastWork = "–"
 
     /// Pro Tipp aus `touchesBegan` – kostet praktisch nichts.
+    private var lastTap: CFTimeInterval = 0
+
     func touchArrived(_ t: UITouch) {
+        lastTap = CACurrentMediaTime()
         let ms = (CACurrentMediaTime() - t.timestamp) * 1000
         guard ms >= 0, ms < 5000 else { return }
         taps += 1
@@ -79,7 +82,8 @@ final class TypingMetrics: ObservableObject {
         let gap = (now - lastFrame) * 1000
         lastFrame = now
         // Ein Bild dauert 8–16 ms. Über 50 ms sieht man ein Ruckeln.
-        if gap > 50, gap < 1000 { // > 1 s = Tastatur war weg, kein Ruckler
+        // Nur Ruckler beim Tippen zählen (kurz nach einem Tipp), nicht beim Öffnen von Menüs
+        if gap > 50, gap < 1000, now - lastTap < 1.2, lastWork != "Panel wechseln" {
             stalls += 1
             if gap > worstStall { worstStall = gap; worstStallLabel = lastWork }
         }

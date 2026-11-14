@@ -79,6 +79,7 @@ struct KeyboardRootView: View {
 struct Toolbar: View {
     @ObservedObject var state: KeyboardState
     @ObservedObject var bar: BarModel
+    @Environment(\.colorScheme) private var scheme
 
     init(state: KeyboardState) {
         _state = ObservedObject(wrappedValue: state)
@@ -236,47 +237,12 @@ struct Toolbar: View {
                 }
                 .buttonStyle(PressableStyle())
                 .transition(.move(edge: .top).combined(with: .opacity))
-            } else if bar.suggestions.isEmpty && bar.phrases.isEmpty {
-                HStack {
-                    Spacer()
-                    if bar.thinking {
-                        Text("KI denkt mit …").font(.caption).foregroundStyle(.secondary)
-                    } else if bar.checking {
-                        Text("KI liest deinen Text …").font(.caption).foregroundStyle(.secondary)
-                    } else {
-                        let profile = state.store.activeProfile.map { "\($0.emoji) \($0.name)" }
-                        let app = state.store.activeApp.map { "\($0.emoji) \($0.name)" }
-                        if let label = [profile, app].compactMap({ $0 }).joined(separator: " · ").nilIfEmpty {
-                            Text(label).font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    Spacer()
-                }
-            } else if bar.suggestions.count <= 3 && bar.phrases.isEmpty {
-                // Klassische iOS-Leiste: drei gleich breite Felder
-                HStack(spacing: 0) {
-                    ForEach(Array(bar.suggestions.enumerated()), id: \.offset) { index, s in
-                        if index > 0 {
-                            Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 1, height: 18)
-                        }
-                        suggestionButton(s, flexible: true)
-                    }
-                }
+            } else if bar.manySuggestions || !bar.phrases.isEmpty {
+                // Viele Vorschläge / KI-Sätze: horizontal scrollbar
+                WideSuggestions(bar: bar, item: { suggestionButton($0, flexible: false) }, phrase: { phraseButton($0) })
             } else {
-                // Viele Vorschläge: horizontal scrollbar
-                ScrollViewReader { reader in
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 4) {
-                            Color.clear.frame(width: 1).id("start")
-                            ForEach(bar.suggestions) { s in suggestionButton(s, flexible: false) }
-                            ForEach(bar.phrases) { p in phraseButton(p) }
-                        }
-                        .padding(.horizontal, 4)
-                    }
-                    .onChange(of: bar.suggestions.map(\.text)) { _, _ in
-                        reader.scrollTo("start", anchor: .leading)
-                    }
-                }
+                // Klassische iOS-Leiste: drei gleich breite Felder – in UIKit, ohne SwiftUI-Neuberechnung
+                SuggestionStrip(state: state, placeholder: placeholderText, tint: state.tint, dark: scheme == .dark)
             }
         }
         .animation(.easeOut(duration: 0.18), value: bar.phrases.map(\.text))
@@ -292,6 +258,15 @@ struct Toolbar: View {
         .frame(maxWidth: .infinity)
         .overlay(alignment: .trailing) { thinkButton }
         .glassCapsule(force: true)
+    }
+
+    /// Text in der leeren Leiste (KI-Status oder aktives Profil/App).
+    private var placeholderText: String {
+        if bar.thinking { return "KI denkt mit …" }
+        if bar.checking { return "KI liest deinen Text …" }
+        let profile = state.store.activeProfile.map { "\($0.emoji) \($0.name)" }
+        let app = state.store.activeApp.map { "\($0.emoji) \($0.name)" }
+        return [profile, app].compactMap { $0 }.joined(separator: " · ")
     }
 
     /// „KI denk mit“ – Vorschläge nur auf Knopfdruck (spart Anfragen).

@@ -309,7 +309,7 @@ final class OpenAIClient {
             """ + (finished
                 ? "Der Text ist fertig: Auch der letzte Satz bekommt sein Satzzeichen (Punkt/Fragezeichen), außer der Text ist eine kurze Chat-Antwort aus 1–3 Wörtern."
                 : "Das ENDE des Textes nicht anfassen (der Nutzer schreibt evtl. noch weiter): kein Satzzeichen hinter das letzte Wort setzen.")
-            : "Kommas nur wenn eindeutig nötig.
+            : "Kommas nur wenn eindeutig nötig."
         if let after, !after.isEmpty { user += "\n\nText danach (nur Kontext, nicht korrigieren):\n\(after)" }
         let raw = try await chat(messages: [
             ChatMessage(role: "system", content: """

@@ -25,6 +25,9 @@ final class SwipeDecoder {
     }()
     private(set) var ready = false
     private var loading = false
+    /// Alle Wörter alphabetisch (für blitzschnelle Präfix-Abfragen ohne Systemwörterbuch).
+    private var sortedWords: [String] = []
+    private var sortedRanks: [Int32] = []
 
     func loadIfNeeded() {
         guard !ready, !loading else { return }
@@ -54,7 +57,13 @@ final class SwipeDecoder {
                     rank += 1
                 }
             }
+            // Alphabetisch sortiert: Präfix-Suche per Binärsuche (Mikrosekunden statt UITextChecker)
+            let pairs = ranks.sorted { $0.key < $1.key }
+            let sw = pairs.map(\.key)
+            let sr = pairs.map { Int32($0.value) }
             DispatchQueue.main.async {
+                self?.sortedWords = sw
+                self?.sortedRanks = sr
                 self?.buckets = lengths
                 self?.rankOf = ranks
                 self?.byEnds = map
@@ -65,6 +74,38 @@ final class SwipeDecoder {
     }
 
     static func keyChar(_ c: Character) -> Character { c == "ß" ? "s" : c }
+
+    private func lowerBound(_ p: String) -> Int {
+        var lo = 0, hi = sortedWords.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if sortedWords[mid] < p { lo = mid + 1 } else { hi = mid }
+        }
+        return lo
+    }
+
+    /// Beginnt irgendein Wort der Liste mit `prefix` (klein)? nil = Liste noch nicht geladen.
+    func hasWord(withPrefix prefix: String) -> Bool? {
+        guard ready, !sortedWords.isEmpty else { return nil }
+        let i = lowerBound(prefix)
+        return i < sortedWords.count && sortedWords[i].hasPrefix(prefix)
+    }
+
+    /// Häufigste Wörter mit diesem Präfix (klein, nach Häufigkeit).
+    func completions(prefix: String, limit: Int, scan: Int = 400) -> [String] {
+        guard ready, !prefix.isEmpty, limit > 0 else { return [] }
+        var i = lowerBound(prefix)
+        var found: [(String, Int32)] = []
+        var scanned = 0
+        while i < sortedWords.count, scanned < scan, sortedWords[i].hasPrefix(prefix) {
+            let w = sortedWords[i]
+            if w.count > prefix.count { found.append((w, sortedRanks[i])) }
+            i += 1
+            scanned += 1
+        }
+        found.sort { $0.1 < $1.1 }
+        return found.prefix(limit).map(\.0)
+    }
 
     /// Häufigkeitsrang eines Wortes (nil = unbekannt).
     func rank(of word: String) -> Int? { rankOf[word.lowercased()] }

@@ -192,7 +192,33 @@ final class KeyCapView: UIView {
         if case .delete = kind {
             icon.image = UIImage(systemName: pressed ? "delete.left.fill" : "delete.left", withConfiguration: UIImage.SymbolConfiguration(pointSize: 18))
         }
-        if let c = lastConfig { applyColors(config: c, dark: lastDark) }
+        // Schneller Pfad: nur die Füllfarbe tauschen (keine Farb-/Schatten-Neuberechnung pro Tipp)
+        if let c = lastConfig, let colors = cachedColors { applyFill(colors, c) } else if let c = lastConfig { applyColors(config: c, dark: lastDark) }
+    }
+
+    private func applyFill(_ colors: KeyColors, _ config: KeysConfig) {
+        let style = KeyStyle(rawValue: config.style) ?? .glass
+        if case .returnKey = kind, config.returnTitle != "⏎" {
+            cap.backgroundColor = tint.withAlphaComponent(isPressed ? 0.6 : 0.95)
+        } else if case .shift = kind, config.shift != .off {
+            cap.backgroundColor = isPressed ? colors.fillPressed : (style == .neon ? tint.withAlphaComponent(0.5) : UIColor.white)
+        } else if isSpecial {
+            cap.backgroundColor = isPressed ? colors.specialFillPressed : colors.specialFill
+        } else {
+            cap.backgroundColor = isPressed ? colors.fillPressed : colors.fill
+        }
+    }
+
+    /// Nur Groß-/Kleinschreibung wechseln (Umschalttaste) – ohne Farben, Schriften und Schatten neu zu setzen.
+    func updateShift(config: KeysConfig, dark: Bool) {
+        switch kind {
+        case .char(let c):
+            let upper = config.layer == .letters && config.shift != .off
+            label.text = upper ? c.uppercased() : c
+            lastConfig = config
+        default:
+            configure(config: config, dark: dark)
+        }
     }
 }
 
@@ -365,12 +391,27 @@ final class KeysView: UIView {
     func apply(_ c: KeysConfig, rowHeight: CGFloat) {
         let structural = config == nil || c.layer != config!.layer || c.needsGlobe != config!.needsGlobe || c.numberRow != config!.numberRow
         let changed = c != config || rowHeight != self.rowHeight
+        let oldConfig = config, oldRowHeight = self.rowHeight
         self.rowHeight = rowHeight
         config = c
         let style: UIUserInterfaceStyle = c.forceDark.map { $0 ? .dark : .light } ?? .unspecified
         if overrideUserInterfaceStyle != style { overrideUserInterfaceStyle = style; popup.overrideUserInterfaceStyle = style }
         guard changed else { return }
-        if structural { rebuild() } else { refreshKeys() }
+        if structural {
+            rebuild()
+            setNeedsLayout()
+            return
+        }
+        // Nur Umschalten geändert? Dann bloß die Beschriftungen tauschen (passiert bei jedem Satzanfang).
+        if let old = oldConfig, rowHeight == oldRowHeight {
+            var same = old
+            same.shift = c.shift
+            if same == c {
+                for k in keys { k.updateShift(config: c, dark: dark) }
+                return
+            }
+        }
+        refreshKeys()
         setNeedsLayout()
     }
 
@@ -550,20 +591,21 @@ final class KeysView: UIView {
         guard let primary = key(at: p) else { return nil }
         if let space = spaceRescue(primary, p) { return space }
         guard config?.layer == .letters, let state, state.store.smartTouch,
-              case .char(let pc) = primary.kind, pc.count == 1, pc.first?.isLetter == true,
-              !state.currentWordIsEmpty else { return primary }
+              case .char(let pc) = primary.kind, pc.count == 1, pc.first?.isLetter == true else { return primary }
         let w = max(primary.frame.width, 1)
         let h = max(primary.frame.height, 1)
         let dPrimary = hypot((p.x - primary.frame.midX) / w, (p.y - primary.frame.midY) / h)
-        // Klar in der Mitte getroffen → nichts ändern
+        // Klar in der Mitte getroffen → nichts ändern (ohne den Text überhaupt zu lesen)
         guard dPrimary > 0.3 else { return primary }
-        if state.isPlausibleContinuation(pc) { return primary }
+        let word = state.currentWord
+        guard !word.isEmpty else { return primary }
+        if state.isPlausibleContinuation(pc, word: word) { return primary }
         var best: (KeyCapView, CGFloat)?
         for k in keys where k !== primary {
             guard case .char(let c) = k.kind, c.count == 1, c.first?.isLetter == true else { continue }
             let d = hypot((p.x - k.frame.midX) / w, (p.y - k.frame.midY) / h)
             guard d < 0.95 else { continue }
-            guard state.isPlausibleContinuation(c) else { continue }
+            guard state.isSurelyPlausibleContinuation(c, word: word) else { continue }
             if best == nil || d < best!.1 { best = (k, d) }
         }
         return best?.0 ?? primary
@@ -665,6 +707,7 @@ final class KeysView: UIView {
             scheduleLongPress(info)
         case .delete:
             info.handled = true
+            state?.noteKeystroke()
             state?.startDelete()
         case .shift:
             info.handled = true
@@ -677,6 +720,7 @@ final class KeysView: UIView {
     private func commit(_ info: TouchInfo) {
         guard !info.handled, let state else { return }
         info.handled = true
+        state.noteKeystroke()
         info.longPressTimer?.invalidate()
         info.key.setPressed(false)
         if info.alternatesActive {

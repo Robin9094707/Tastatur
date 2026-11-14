@@ -785,6 +785,28 @@ final class KeyboardState: ObservableObject {
 
     // MARK: - Vorschläge (entkoppelt vom Tippen)
 
+    // MARK: - Tipp-Rhythmus (Power-Tippen)
+
+    private var lastKeystroke: CFTimeInterval = 0
+    /// Geglätteter Abstand zwischen zwei Tasten (Sekunden).
+    private var keyInterval: CFTimeInterval = 0.3
+
+    /// Wird bei jedem Tastendruck aufgerufen (nur Zeitstempel – kostet nichts).
+    func noteKeystroke() {
+        let now = CACurrentMediaTime()
+        let dt = now - lastKeystroke
+        lastKeystroke = now
+        if dt < 1.0 { keyInterval = keyInterval * 0.7 + dt * 0.3 }
+    }
+
+    /// Vorschläge erst in der Tipp-Pause berechnen: Wer schnell tippt, bekommt zwischen zwei Tasten
+    /// keine Arbeit auf den Haupt-Thread – jeder Tipp wird sofort verarbeitet.
+    private var refreshDelay: TimeInterval {
+        let sinceKey = CACurrentMediaTime() - lastKeystroke
+        guard sinceKey < 0.6 else { return 0.05 }
+        return min(0.28, max(0.07, keyInterval * 1.35))
+    }
+
     func scheduleRefresh() {
         if !liveEditing, !bar.issues.isEmpty { pruneIssues() }
         if !liveEditing {
@@ -798,7 +820,7 @@ final class KeyboardState: ObservableObject {
         refreshWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.refreshSuggestionsNow() }
         refreshWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + refreshDelay, execute: work)
     }
 
     func refreshSuggestionsNow() {
@@ -824,6 +846,10 @@ final class KeyboardState: ObservableObject {
             return
         }
         let word = currentWord
+        // Tipp-Pause nutzen: offene Präfix-Fragen klären und die Tipp-Korrektur vorberechnen,
+        // damit das Leerzeichen später sofort fertig ist.
+        engine.warmPendingPrefixes()
+        precomputeTapFix(for: word)
         var list: [Suggestion] = []
         let token = currentToken
         for t in engine.tokenCompletions(prefix: token) {
@@ -1863,10 +1889,19 @@ final class KeyboardState: ObservableObject {
     // MARK: - Intelligente Trefferzonen
 
     /// Bewertet, ob ein Buchstabe das aktuelle Wort sinnvoll fortsetzt.
-    func isPlausibleContinuation(_ letter: String) -> Bool {
-        let word = currentWord
+    /// Läuft direkt im Tipp-Moment: nur Speicher-Abfragen (Wortliste per Binärsuche, Cache) – nie das langsame
+    /// Systemwörterbuch. Unbekanntes zählt als „passt“ (die Taste wird dann nie umgebogen) und wird in der
+    /// nächsten Tipp-Pause nachgeschlagen.
+    func isPlausibleContinuation(_ letter: String, word: String? = nil) -> Bool {
+        let word = word ?? currentWord
         guard !word.isEmpty else { return true }
-        return engine.isPlausiblePrefix(word + letter)
+        return engine.isPlausiblePrefixFast(word + letter) ?? true
+    }
+
+    /// Strenge Variante für Nachbartasten: nur nachweislich passende Fortsetzungen.
+    func isSurelyPlausibleContinuation(_ letter: String, word: String) -> Bool {
+        guard !word.isEmpty else { return true }
+        return engine.isPlausiblePrefixFast(word + letter) == true
     }
 
     var currentWordIsEmpty: Bool { currentWord.isEmpty }
@@ -2611,11 +2646,20 @@ final class KeyboardState: ObservableObject {
         typed.first?.isUppercase == true ? engine.casedLike(typed, result) : engine.swipeCased(result)
     }
 
+    /// Berechnet die Tipp-Korrektur für das aktuelle Wort schon in der Pause vor (Ergebnis in `tapFix`).
+    private func precomputeTapFix(for word: String) {
+        guard !word.isEmpty, store.autocorrect, tapFix?.word != word || tapFixTaps != wordTaps else { return }
+        guard let inputs = tapInputs(for: word), !engine.spelledCorrectly(word) else { tapFix = nil; return }
+        tapFix = (word, Self.computeTap(inputs))
+        tapFixTaps = wordTaps
+    }
+    private var tapFixTaps: [CGPoint] = []
+
     /// Korrektur beim Abschließen eines Wortes: zuerst über die Fingerpositionen, sonst klassisch.
     func smartCorrection(for word: String) -> String? {
         if let inputs = tapInputs(for: word), !engine.spelledCorrectly(word) {
             let result: String?
-            if let f = tapFix, f.word == word { result = f.result } else { result = Self.computeTap(inputs) }
+            if let f = tapFix, f.word == word, tapFixTaps == wordTaps { result = f.result } else { result = Self.computeTap(inputs) }
             if let result { return casedTapResult(word, result) }
         }
         return engine.correction(for: word)

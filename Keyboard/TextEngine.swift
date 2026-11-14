@@ -32,6 +32,7 @@ final class TextEngine {
                 for (k, v) in toks { self.tokens[k, default: 0] += v }
                 for (k, v) in tris { self.trigrams[k] = (self.trigrams[k] ?? [:]).merging(v, uniquingKeysWith: +) }
                 self.loaded = true
+                self.rebuildLearnedIndex()
                 self.buildPrefixes()
             }
         }
@@ -55,12 +56,35 @@ final class TextEngine {
         }
     }
 
+    /// Schnelle Variante für den Tipp-Moment (nur Speicher-Abfragen, nie das Systemwörterbuch).
+    /// nil = unbekannt → wird in der nächsten Tipp-Pause im Hintergrund nachgeschlagen.
+    func isPlausiblePrefixFast(_ prefix: String) -> Bool? {
+        let p = prefix.lowercased()
+        if p.count <= 1 { return true }
+        if prefixes.contains(p) { return true }
+        if let c = plausibleCache[p] { return c }
+        if SwipeDecoder.shared.hasWord(withPrefix: p) == true { return true }
+        if pendingPlausible.count < 24, !pendingPlausible.contains(p) { pendingPlausible.append(p) }
+        return nil
+    }
+
+    private var pendingPlausible: [String] = []
+
+    /// In Tipp-Pausen: offene Präfix-Fragen mit dem Systemwörterbuch klären (wenige pro Pause).
+    func warmPendingPrefixes(max n: Int = 4) {
+        guard !pendingPlausible.isEmpty else { return }
+        let batch = pendingPlausible.prefix(n)
+        pendingPlausible.removeFirst(batch.count)
+        for p in batch { _ = isPlausiblePrefix(p) }
+    }
+
     /// Kann `prefix` der Anfang eines echten Wortes sein?
     func isPlausiblePrefix(_ prefix: String) -> Bool {
         let p = prefix.lowercased()
         if p.count <= 1 { return true }
         if prefixes.contains(p) { return true }
         if let c = plausibleCache[p] { return c }
+        if SwipeDecoder.shared.hasWord(withPrefix: p) == true { return true }
         if !warmedUp { warmUp() }
         let ns = p as NSString
         let range = NSRange(location: 0, length: ns.length)
@@ -120,20 +144,39 @@ final class TextEngine {
                 add(w)
             }
         }
-        // 2. Gelernte Wörter nach Häufigkeit
-        for (w, _) in learned.filter({ $0.key.lowercased().hasPrefix(lower) && $0.key.count > prefix.count }).sorted(by: { $0.value > $1.value }).prefix(4) {
-            add(w)
+        // 2. Gelernte Wörter nach Häufigkeit (nur der Anfangsbuchstaben-Topf, nicht alle Wörter)
+        if let first = lower.first, let bucket = learnedIndex[first] {
+            var hits: [(String, Int)] = []
+            for (w, lw) in bucket where lw.hasPrefix(lower) && lw.count > lower.count {
+                hits.append((w, learned[w] ?? 0))
+            }
+            for (w, _) in hits.sorted(by: { $0.1 > $1.1 }).prefix(4) { add(w) }
         }
         // 3. Häufige deutsche Wörter (Liste ist nach Häufigkeit sortiert)
         for w in CommonWords.german where w.lowercased().hasPrefix(lower) && w.count > prefix.count {
             add(w)
             if result.count >= limit + 1 { break }
         }
-        // 4. Systemwörterbuch
-        if result.count < limit + 1, warmedUp {
-            let ns = prefix as NSString
-            let comps = checker.completions(forPartialWordRange: NSRange(location: 0, length: ns.length), in: prefix, language: language) ?? []
-            for w in comps.sorted(by: { $0.count < $1.count }).prefix(6) { add(w) }
+        // 4. Große Wortliste (nach Häufigkeit, Binärsuche – sehr schnell)
+        if result.count < limit + 1, lower.count >= 2 {
+            for w in SwipeDecoder.shared.completions(prefix: lower, limit: limit + 1) {
+                add(casedCached(w))
+                if result.count >= limit + 1 { break }
+            }
+        }
+        // 5. Systemwörterbuch (nur wenn sonst nichts passt, mit Zwischenspeicher)
+        if result.count < limit, warmedUp {
+            let comps: [String]
+            if let c = systemCompletionCache[lower] {
+                comps = c
+            } else {
+                let ns = prefix as NSString
+                comps = Array((checker.completions(forPartialWordRange: NSRange(location: 0, length: ns.length), in: prefix, language: language) ?? [])
+                    .sorted(by: { $0.count < $1.count }).prefix(6))
+                if systemCompletionCache.count > 400 { systemCompletionCache.removeAll() }
+                systemCompletionCache[lower] = comps
+            }
+            for w in comps { add(w) }
         }
         return result.prefix(limit).map { matchCase(of: prefix, $0) }
     }
@@ -170,7 +213,42 @@ final class TextEngine {
         return false
     }
 
+    /// Zwischenspeicher: Die Korrektur wird meist schon in der Tipp-Pause berechnet – beim Leerzeichen ist sie dann sofort da.
+    private var correctionCache: [String: String?] = [:]
+    private var systemCompletionCache: [String: [String]] = [:]
+
     func correction(for word: String) -> String? {
+        if let c = correctionCache[word] { return c }
+        let r = correctionUncached(for: word)
+        if correctionCache.count > 600 { correctionCache.removeAll() }
+        correctionCache[word] = .some(r)
+        return r
+    }
+
+    /// Richtige Großschreibung (Nomen) für Vorschläge aus der Wortliste – zwischengespeichert.
+    private var casedCache: [String: String] = [:]
+    private func casedCached(_ word: String) -> String {
+        if let c = casedCache[word] { return c }
+        let r = swipeCased(word)
+        if casedCache.count > 800 { casedCache.removeAll() }
+        casedCache[word] = r
+        return r
+    }
+
+    // MARK: - Index der gelernten Wörter (nach Anfangsbuchstabe, klein)
+
+    private var learnedIndex: [Character: [String: String]] = [:]
+
+    private func rebuildLearnedIndex() {
+        var idx: [Character: [String: String]] = [:]
+        for w in learned.keys {
+            let lw = w.lowercased()
+            if let f = lw.first { idx[f, default: [:]][w] = lw }
+        }
+        learnedIndex = idx
+    }
+
+    private func correctionUncached(for word: String) -> String? {
         guard word.count >= 2,
               word.rangeOfCharacter(from: .decimalDigits) == nil,
               word.rangeOfCharacter(from: CharacterSet.letters.inverted.subtracting(CharacterSet(charactersIn: "-'"))) == nil,
@@ -282,7 +360,13 @@ final class TextEngine {
     func learn(word: String, previous: String?, weight: Int = 1) {
         guard store.learnWords, word.count >= 2, word.count <= 40,
               word.rangeOfCharacter(from: .letters) != nil else { return }
+        let isNew = learned[word] == nil
         learned[word, default: 0] += weight
+        if isNew {
+            let lw = word.lowercased()
+            if let f = lw.first { learnedIndex[f, default: [:]][word] = lw }
+            correctionCache.removeAll()
+        }
         // Zwischenspeicher fürs Wischen nur ab und zu neu bauen (spart Arbeit bei jedem Wort)
         learnsSinceCache += 1
         if learnsSinceCache > 25 || (swipeLearnedCache != nil && learned[word] == weight) { swipeLearnedCache = nil; learnsSinceCache = 0 }
@@ -378,6 +462,7 @@ final class TextEngine {
         dirty = 0
         if learned.count > 5000 {
             learned = Dictionary(uniqueKeysWithValues: learned.sorted { $0.value > $1.value }.prefix(4000).map { ($0.key, $0.value) })
+            rebuildLearnedIndex()
         }
         if bigrams.count > 3000 {
             bigrams = Dictionary(uniqueKeysWithValues: bigrams.sorted { $0.value.values.reduce(0, +) > $1.value.values.reduce(0, +) }.prefix(2500).map { ($0.key, $0.value) })

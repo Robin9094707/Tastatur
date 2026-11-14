@@ -86,6 +86,11 @@ final class SharedStore: ObservableObject {
     @Published var clipFolders: [String] = [] { didSet { setCodable(clipFolders, "clipFolders") } }
     /// Frisch Kopiertes (Text, Link, Bild, Datei) oben in der Leiste zum Einfügen anbieten.
     @Published var clipPeek: Bool = true { didSet { set(clipPeek, "clipPeek") } }
+    /// Light-Modus: nur die Basics (Tippen, Übersetzen, KI auf Knopfdruck, Ablage) – keine Vorschläge,
+    /// Autokorrektur, Wischen, Trefferzonen, Hintergrund-Prüfungen oder Zwischenablage-Überwachung.
+    @Published var lightMode: Bool = false { didSet { set(lightMode, "lightMode") } }
+    /// Debug-Protokoll in der Tastatur aufzeichnen.
+    @Published var debugLog: Bool = false { didSet { set(debugLog, "debugLog") } }
     /// Bei Anmeldefeldern „Passwörter“ in der Leiste zeigen.
     @Published var passwordHelper: Bool = true { didSet { set(passwordHelper, "passwordHelper") } }
     /// Bei Anmeldefeldern automatisch zur iOS-Tastatur (Autofill) wechseln.
@@ -211,6 +216,8 @@ final class SharedStore: ObservableObject {
         upd(\.clipboardLimit, d.object(forKey: "clipboardLimit") as? Int ?? 50)
         upd(\.clipFolders, getCodable("clipFolders") ?? [])
         upd(\.clipPeek, bool("clipPeek", true))
+        upd(\.lightMode, bool("lightMode", false))
+        upd(\.debugLog, bool("debugLog", false))
         upd(\.passwordHelper, bool("passwordHelper", true))
         upd(\.loginAutoSwitch, bool("loginAutoSwitch", false))
         upd(\.passwordApp, d.string(forKey: "passwordApp") ?? "auto")

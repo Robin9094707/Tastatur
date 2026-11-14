@@ -64,6 +64,8 @@ struct KeyboardRootView: View {
             DiscordPanel(state: state).transition(.move(edge: .bottom).combined(with: .opacity))
         case .check:
             CheckPanel(state: state).transition(.move(edge: .bottom).combined(with: .opacity))
+        case .debug:
+            DebugLogPanel(state: state).transition(.move(edge: .bottom).combined(with: .opacity))
         case .history:
             HistoryPanel(state: state, extras: state.extras).transition(.move(edge: .bottom).combined(with: .opacity))
         }
@@ -161,6 +163,7 @@ struct Toolbar: View {
         case .commands: return "Befehle"
         case .discord: return "Discord"
         case .history: return "Verlauf & Rückgängig"
+        case .debug: return "Debug-Protokoll"
         case .check: return bar.issues.isEmpty ? "Textprüfung" : "Textprüfung · \(bar.issues.count) Hinweis\(bar.issues.count == 1 ? "" : "e")"
         default: return ""
         }

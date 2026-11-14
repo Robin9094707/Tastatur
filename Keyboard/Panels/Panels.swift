@@ -863,6 +863,41 @@ struct KeyboardSettingsPanel: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
+            HStack(spacing: 8) {
+                Button { state.setLightMode(!store.lightMode) } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: store.lightMode ? "bolt.fill" : "bolt")
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text("Light-Modus").font(.footnote.weight(.semibold))
+                            Text(store.lightMode ? "An – nur Basics" : "Aus").font(.caption2).foregroundStyle(store.lightMode ? Color.white.opacity(0.85) : Color.secondary)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(store.lightMode ? Color.white : Color.primary)
+                    .padding(.horizontal, 10)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .glass(cornerRadius: 12, tint: store.lightMode ? state.tint : nil, interactive: true)
+                }
+                .buttonStyle(.plain)
+                Button { state.toggle(.debug) } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "ladybug")
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text("Debug-Protokoll").font(.footnote.weight(.semibold))
+                            Text(store.debugLog ? "Zeichnet auf" : "Aus").font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .glass(cornerRadius: 12, interactive: true)
+                }
+                .buttonStyle(.plain)
+            }
+            if store.lightMode {
+                Text("Light-Modus: Kein Wischen, keine Vorschläge, keine Autokorrektur, keine Trefferzonen, keine Hintergrund-Prüfungen, keine Zwischenablage-Überwachung. Übersetzen, KI-Aktionen auf Knopfdruck, Ablage, Emojis und Makros (über die Leiste) gehen weiter.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
             Text("Profil").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             profileChips
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {

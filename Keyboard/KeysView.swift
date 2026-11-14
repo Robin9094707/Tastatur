@@ -560,7 +560,7 @@ final class KeysView: UIView {
 
     private func key(at p: CGPoint) -> KeyCapView? {
         // Buchstaben: persönliche Trefferzonen (gelernte Abweichung je Taste)
-        if config?.layer == .letters, let state, state.store.adaptiveTouch, let k = adaptiveLetter(at: p, state) { return k }
+        if config?.layer == .letters, let state, state.store.adaptiveTouch, !state.store.lightMode, let k = adaptiveLetter(at: p, state) { return k }
         if let k = keys.first(where: { $0.cellFrame.contains(p) }) { return k }
         // nächstgelegene Taste (z. B. Berührung ganz am Rand)
         return keys.min { a, b in
@@ -621,7 +621,7 @@ final class KeysView: UIView {
     private func smartKey(at p: CGPoint) -> KeyCapView? {
         guard let primary = key(at: p) else { return nil }
         if let space = spaceRescue(primary, p) { return space }
-        guard config?.layer == .letters, let state, state.store.smartTouch,
+        guard config?.layer == .letters, let state, state.store.smartTouch, !state.store.lightMode,
               case .char(let pc) = primary.kind, pc.count == 1, pc.first?.isLetter == true else { return primary }
         let w = max(primary.frame.width, 1)
         let h = max(primary.frame.height, 1)
@@ -644,7 +644,7 @@ final class KeysView: UIView {
 
     /// Schnelles Tippen: Wer am Wortende knapp über der Leertaste auf c/v/b/n/m landet, meint fast immer „Leer“.
     private func spaceRescue(_ primary: KeyCapView, _ p: CGPoint) -> KeyCapView? {
-        guard config?.layer == .letters, let state, state.store.smartTouch,
+        guard config?.layer == .letters, let state, state.store.smartTouch, !state.store.lightMode,
               case .char(let c) = primary.kind, "cvbnm".contains(c.lowercased()),
               p.y > primary.frame.maxY - primary.frame.height * 0.24,
               !state.currentWordIsEmpty, state.currentWordIsComplete, !state.isPlausibleContinuation(c),
@@ -827,7 +827,7 @@ final class KeysView: UIView {
 
     /// Verfolgt die Fingerbahn. true = Wischgeste aktiv (normale Tastenlogik überspringen).
     private func trackSwipe(_ info: TouchInfo, _ p: CGPoint) -> Bool {
-        guard config?.layer == .letters, let state, state.store.swipeTyping, !info.alternatesActive else { return false }
+        guard config?.layer == .letters, let state, state.store.swipeTyping, !state.store.lightMode, !info.alternatesActive else { return false }
         if let last = info.path.last {
             let d = hypot(p.x - last.x, p.y - last.y)
             guard d > 2 else { return info.swiping }

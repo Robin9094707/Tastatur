@@ -22,6 +22,7 @@ enum Panel: Equatable {
     case discord
     case check
     case history
+    case debug
 }
 
 struct Suggestion: Identifiable, Equatable {
@@ -306,7 +307,9 @@ final class KeyboardState: ObservableObject {
 
     func appear() {
         store.reload()
-        if store.swipeTyping || store.tapCorrection { SwipeDecoder.shared.loadIfNeeded() }
+        DebugLog.shared.add(.system, "Tastatur geöffnet" + (store.lightMode ? " (Light-Modus)" : "") + " · Speicher \(DebugLog.memoryMB()) MB")
+        DebugLog.shared.setActive(store.debugLog)
+        if !store.lightMode, store.swipeTyping || store.tapCorrection { SwipeDecoder.shared.loadIfNeeded() }
         if sourceMode != store.aiScope { sourceMode = store.aiScope }
         let full = controller?.hasFullAccess ?? false
         if hasFullAccess != full { hasFullAccess = full }
@@ -326,6 +329,7 @@ final class KeyboardState: ObservableObject {
                     DispatchQueue.main.async { self?.engine.setLexicon(lex) }
                 }
             }
+            guard !self.store.lightMode else { return }
             self.engine.warmUp()
             self.loadContactsIfNeeded()
             self.refreshSuggestionsNow()
@@ -338,6 +342,7 @@ final class KeyboardState: ObservableObject {
     private var lexiconRequested = false
 
     func handleMemoryWarning() {
+        DebugLog.shared.add(.warning, "Speicherwarnung von iOS · \(DebugLog.memoryMB()) MB")
         predictionCache.removeAll()
         predictionOrder.removeAll()
         aiDiff = nil
@@ -345,8 +350,10 @@ final class KeyboardState: ObservableObject {
     }
 
     func disappear() {
+        DebugLog.shared.add(.system, "Tastatur geschlossen · Speicher \(DebugLog.memoryMB()) MB")
+        DebugLog.shared.setActive(false)
         finishDeletionBurst()
-        snapshotHistory()
+        if !store.lightMode { snapshotHistory() }
         engine.save()
         if touchModelUpdates > 0 { saveTouchModel() }
         clipTimer?.invalidate()
@@ -361,7 +368,7 @@ final class KeyboardState: ObservableObject {
     private func textDidChangeWork() {
         if !wordTaps.isEmpty, wordTaps.count != currentWord.count { wordTaps = [] }
         updateReturnKey()
-        updateLoginField()
+        if !store.lightMode { updateLoginField() }
         if bar.clipHidden { restoreClipPeekIfEmpty() }
         if !composeMode {
             updateAutoShift()
@@ -449,6 +456,7 @@ final class KeyboardState: ObservableObject {
     }
 
     func showToast(_ text: String) {
+        DebugLog.shared.add(.info, "Hinweis: " + text)
         toast = text
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { [weak self] in
             if self?.toast == text { self?.toast = nil }
@@ -611,8 +619,8 @@ final class KeyboardState: ObservableObject {
         finishDeletionBurst()
         lastSwipe = nil
         // Vor dem Senden: Text im Verlauf sichern (danach ist das Feld meist leer)
-        if !composeMode, returnTitle != "⏎" { snapshotHistory() }
-        if !composeMode { detectEvent(in: currentLine) }
+        if !composeMode, !store.lightMode, returnTitle != "⏎" { snapshotHistory() }
+        if !composeMode, !store.lightMode { detectEvent(in: currentLine) }
         if composeMode {
             if composeTarget.isLongText { composeText += "\n"; return }
             sendCompose(); return
@@ -622,7 +630,7 @@ final class KeyboardState: ObservableObject {
 
     /// Schließt das aktuelle Wort ab: Makros, Textersetzung, Autokorrektur, Lernen.
     private func commitWord(trailing: String) {
-        if isCommandLine {
+        if isCommandLine || store.lightMode {
             // Befehle exakt so lassen, wie getippt
             proxy?.insertText(trailing)
             undoCorrection = nil
@@ -704,6 +712,13 @@ final class KeyboardState: ObservableObject {
 
     func afterCommit() {
         wordTaps = []
+        if store.lightMode {
+            // Light-Modus: nur Umschalten/Ebene, keine Prüfungen
+            if layer != .letters { layer = .letters }
+            if shift == .on { shift = .off }
+            updateAutoShift()
+            return
+        }
         wordsSincePrediction += 1
         if !liveEditing {
             let end = before.last.map { ".!?\n".contains($0) } ?? false
@@ -879,6 +894,10 @@ final class KeyboardState: ObservableObject {
     }
 
     func scheduleRefresh() {
+        if store.lightMode {
+            if !bar.suggestions.isEmpty { bar.suggestions = [] }
+            return
+        }
         schedulePrefetch()
         if !liveEditing, !bar.issues.isEmpty { pruneIssues() }
         if !liveEditing {
@@ -925,6 +944,7 @@ final class KeyboardState: ObservableObject {
 
     private func refreshSuggestionsWork() {
         aiSuggestionTask?.cancel()
+        if store.lightMode { if !suggestions.isEmpty { suggestions = [] }; return }
         aiThinking = false
         if composeMode || (panel != .none && panel != .tools) { return }
         if let sw = lastSwipe, currentWord == sw.word {
@@ -1384,6 +1404,7 @@ final class KeyboardState: ObservableObject {
         } catch {
             guard !Task.isCancelled else { return }
             aiError = error.localizedDescription
+            DebugLog.shared.add(.error, "KI-Fehler: " + error.localizedDescription)
             aiBusy = false
         }
     }
@@ -1688,7 +1709,7 @@ final class KeyboardState: ObservableObject {
     // MARK: - Zwischenablage
 
     private func startClipboardWatch() {
-        guard hasFullAccess, store.clipboardEnabled || store.clipPeek else {
+        guard hasFullAccess, !store.lightMode, store.clipboardEnabled || store.clipPeek else {
             loadClipsOnce()
             return
         }
@@ -3187,8 +3208,35 @@ final class KeyboardState: ObservableObject {
 
     // MARK: - Panels
 
+    /// Light-Modus sofort umschalten (ohne die Tastatur neu zu öffnen).
+    func setLightMode(_ on: Bool) {
+        store.lightMode = on
+        DebugLog.shared.add(.system, on ? "Light-Modus an" : "Light-Modus aus")
+        if on {
+            clipTimer?.invalidate()
+            clipTimer = nil
+            bar.suggestions = []
+            bar.phrases = []
+            bar.clip = nil
+            bar.login = false
+            bar.offer = nil
+            bar.issues = []
+            bar.offerFixes = false
+            aiSuggestionTask?.cancel()
+            refreshWork?.cancel()
+            showToast("⚡ Light-Modus: nur die Basics")
+        } else {
+            if store.swipeTyping || store.tapCorrection { SwipeDecoder.shared.loadIfNeeded() }
+            engine.warmUp()
+            startClipboardWatch()
+            showToast("Alle Funktionen wieder an")
+        }
+        feedback(.medium)
+    }
+
     func toggle(_ p: Panel) {
         TypingMetrics.shared.lastWork = "Panel wechseln"
+        DebugLog.shared.add(.ui, "Panel: \(p)")
         feedback()
         if composeMode { cancelCompose() }
         if panel == .result, p == .result, aiBusy { cancelAI() }

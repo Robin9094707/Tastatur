@@ -252,10 +252,11 @@ final class TextEngine {
                 var n = Set<Character>()
                 if i > 0 { n.insert(row[i - 1]) }
                 if i < row.count - 1 { n.insert(row[i + 1]) }
-                for rr in [r - 1, r + 1] where rr >= 0 && rr < rows.count {
+                // Versatz der Reihen wie auf dem iPhone (QWERTZ)
+                let shifts: [(Int, [Int])] = r == 0 ? [(1, [-1, 0])] : (r == 1 ? [(0, [0, 1]), (2, [-2, -1])] : [(1, [1, 2])])
+                for (rr, offs) in shifts {
                     let other = rows[rr]
-                    let offset = rr > r ? (r == 1 ? 1 : 0) : (r == 2 ? 1 : 0)
-                    for j in [i - 1 + offset, i + offset] where j >= 0 && j < other.count { n.insert(other[j]) }
+                    for o in offs where i + o >= 0 && i + o < other.count { n.insert(other[i + o]) }
                 }
                 map[ch] = n
             }

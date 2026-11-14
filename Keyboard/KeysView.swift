@@ -265,10 +265,20 @@ final class KeyPopupView: UIView {
         let h: CGFloat = 54
         var x = capFrame.midX - w / 2
         x = min(max(x, container.minX + 2), container.maxX - w - 2)
-        frame = CGRect(x: x, y: capFrame.minY - h - 4, width: w, height: h)
-        bg.frame = CGRect(origin: .zero, size: frame.size)
-        label.frame = bg.bounds
+        let newFrame = CGRect(x: x, y: capFrame.minY - h - 4, width: w, height: h)
+        // Ohne Animationen umsetzen und Schattenform vorgeben – sonst rechnet die GPU den Schatten bei jedem Tipp neu
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if frame.size != newFrame.size {
+            frame = newFrame
+            bg.frame = CGRect(origin: .zero, size: newFrame.size)
+            label.frame = bg.bounds
+            bg.layer.shadowPath = UIBezierPath(roundedRect: bg.bounds, cornerRadius: bg.layer.cornerRadius).cgPath
+        } else {
+            frame = newFrame
+        }
         isHidden = false
+        CATransaction.commit()
     }
 
     func hide() { isHidden = true }
@@ -319,6 +329,7 @@ final class AlternatesView: UIView {
         x = min(max(x, container.minX + 2), container.maxX - w - 2)
         frame = CGRect(x: x, y: capFrame.minY - h - 4, width: w, height: h)
         bg.frame = CGRect(origin: .zero, size: frame.size)
+        bg.layer.shadowPath = UIBezierPath(roundedRect: bg.bounds, cornerRadius: bg.layer.cornerRadius).cgPath
         for (i, l) in labels.enumerated() {
             l.frame = CGRect(x: 4 + CGFloat(i) * cellWidth, y: 4, width: cellWidth, height: h - 8)
         }

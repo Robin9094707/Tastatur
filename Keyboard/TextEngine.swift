@@ -2,7 +2,22 @@ import UIKit
 
 /// Lokale Autovervollständigung + Autokorrektur. Arbeitet komplett offline.
 final class TextEngine {
+    // MARK: Systemwörterbuch – nur im Hintergrund!
+    // UITextChecker braucht pro Abfrage oft 10–50 ms. Lief das auf dem Haupt-Thread, wurde in jeder
+    // Tipp-Pause der nächste Tastendruck ausgebremst. Deshalb: eine serielle Warteschlange, ein Checker.
+    private let checkQueue = DispatchQueue(label: "tastatur.checker", qos: .userInitiated)
+    /// NUR auf `checkQueue` benutzen.
     private let checker = UITextChecker()
+    /// NUR auf `checkQueue`: Ergebnisse der Hintergrund-Prüfungen.
+    private var bgCorr: [String: String?] = [:]
+    private var bgSpelled: [String: Bool] = [:]
+    private var bgWarm = false
+    /// Zuletzt angefragtes Wort (veraltete Aufträge überspringen).
+    private let latestLock = NSLock()
+    private var latestWord = ""
+    /// Wird auf dem Haupt-Thread aufgerufen, wenn neue Wörterbuch-Ergebnisse da sind.
+    var onAsyncResult: (() -> Void)?
+    private var inFlight = Set<String>()
     private let store = SharedStore.shared
     private var learned: [String: Int] = [:]
     private var bigrams: [String: [String: Int]] = [:]
@@ -70,46 +85,56 @@ final class TextEngine {
 
     private var pendingPlausible: [String] = []
 
-    /// In Tipp-Pausen: offene Präfix-Fragen mit dem Systemwörterbuch klären (wenige pro Pause).
-    func warmPendingPrefixes(max n: Int = 4) {
+    /// In Tipp-Pausen: offene Präfix-Fragen im Hintergrund mit dem Systemwörterbuch klären.
+    func warmPendingPrefixes(max n: Int = 6) {
         guard !pendingPlausible.isEmpty else { return }
-        let batch = pendingPlausible.prefix(n)
+        let batch = Array(pendingPlausible.prefix(n))
         pendingPlausible.removeFirst(batch.count)
-        for p in batch { _ = isPlausiblePrefix(p) }
+        checkQueue.async { [weak self] in
+            guard let self else { return }
+            self.bgWarmUp()
+            var out: [String: Bool] = [:]
+            for p in batch { out[p] = self.bgIsPlausiblePrefix(p) }
+            DispatchQueue.main.async {
+                if self.plausibleCache.count > 3000 { self.plausibleCache.removeAll() }
+                self.plausibleCache.merge(out) { _, n in n }
+            }
+        }
     }
 
-    /// Kann `prefix` der Anfang eines echten Wortes sein?
-    func isPlausiblePrefix(_ prefix: String) -> Bool {
-        let p = prefix.lowercased()
-        if p.count <= 1 { return true }
-        if prefixes.contains(p) { return true }
-        if let c = plausibleCache[p] { return c }
-        if SwipeDecoder.shared.hasWord(withPrefix: p) == true { return true }
-        if !warmedUp { warmUp() }
+    /// NUR auf `checkQueue`.
+    private func bgIsPlausiblePrefix(_ p: String) -> Bool {
         let ns = p as NSString
         let range = NSRange(location: 0, length: ns.length)
-        var ok = !(checker.completions(forPartialWordRange: range, in: p, language: language) ?? []).isEmpty
-        if !ok {
-            ok = checker.rangeOfMisspelledWord(in: p, range: range, startingAt: 0, wrap: false, language: language).location == NSNotFound
-        }
-        if plausibleCache.count > 3000 { plausibleCache.removeAll() }
-        plausibleCache[p] = ok
-        return ok
+        if !(checker.completions(forPartialWordRange: range, in: p, language: language) ?? []).isEmpty { return true }
+        return checker.rangeOfMisspelledWord(in: p, range: range, startingAt: 0, wrap: false, language: language).location == NSNotFound
     }
 
     func isLearned(_ word: String) -> Bool {
         learned[word] != nil || learned[word.lowercased()] != nil
     }
 
-    /// Lädt das Systemwörterbuch einmalig vor (erste Abfrage ist sonst spürbar langsam).
+    /// Lädt das Systemwörterbuch einmalig vor – im Hintergrund (die erste Abfrage ist sonst spürbar langsam).
     func warmUp() {
         guard !warmedUp else { return }
         warmedUp = true
+        checkQueue.async { [weak self] in self?.bgWarmUp() }
+    }
+
+    /// NUR auf `checkQueue`.
+    private func bgWarmUp() {
+        guard !bgWarm else { return }
+        bgWarm = true
         let langs = UITextChecker.availableLanguages
         language = langs.first { $0.hasPrefix("de") } ?? "de_DE"
         englishLanguage = langs.first { $0.hasPrefix("en") }
         _ = checker.rangeOfMisspelledWord(in: "hallo", range: NSRange(location: 0, length: 5), startingAt: 0, wrap: false, language: language)
     }
+
+    /// Führt Arbeit auf der Wörterbuch-Warteschlange aus (für Tipp-Korrektur im Hintergrund).
+    func onCheckQueue(_ work: @escaping () -> Void) { checkQueue.async(execute: work) }
+    /// Wartet, bis laufende Hintergrund-Prüfungen fertig sind (nur beim Leerzeichen, wenn nötig).
+    func drainCheckQueue() { checkQueue.sync {} }
 
     func setLexicon(_ lex: UILexicon) {
         for entry in lex.entries {
@@ -164,19 +189,14 @@ final class TextEngine {
                 if result.count >= limit + 1 { break }
             }
         }
-        // 5. Systemwörterbuch (nur wenn sonst nichts passt, mit Zwischenspeicher)
+        // 5. Systemwörterbuch (nur wenn sonst nichts passt) – nie blockierend: aus dem Zwischenspeicher,
+        //    sonst im Hintergrund nachschlagen und die Leiste danach auffrischen.
         if result.count < limit, warmedUp {
-            let comps: [String]
-            if let c = systemCompletionCache[lower] {
-                comps = c
+            if let comps = systemCompletionCache[lower] {
+                for w in comps { add(w) }
             } else {
-                let ns = prefix as NSString
-                comps = Array((checker.completions(forPartialWordRange: NSRange(location: 0, length: ns.length), in: prefix, language: language) ?? [])
-                    .sorted(by: { $0.count < $1.count }).prefix(6))
-                if systemCompletionCache.count > 400 { systemCompletionCache.removeAll() }
-                systemCompletionCache[lower] = comps
+                requestSystemCompletions(prefix)
             }
-            for w in comps { add(w) }
         }
         return result.prefix(limit).map { matchCase(of: prefix, $0) }
     }
@@ -190,6 +210,25 @@ final class TextEngine {
             for (w, _) in next.sorted(by: { $0.value > $1.value }) where result.count < limit && !result.contains(w) { result.append(w) }
         }
         return result
+    }
+
+    private func requestSystemCompletions(_ prefix: String) {
+        let lower = prefix.lowercased()
+        guard !inFlight.contains("c:" + lower) else { return }
+        inFlight.insert("c:" + lower)
+        checkQueue.async { [weak self] in
+            guard let self else { return }
+            self.bgWarmUp()
+            let ns = prefix as NSString
+            let comps = Array((self.checker.completions(forPartialWordRange: NSRange(location: 0, length: ns.length), in: prefix, language: self.language) ?? [])
+                .sorted(by: { $0.count < $1.count }).prefix(6))
+            DispatchQueue.main.async {
+                self.inFlight.remove("c:" + lower)
+                if self.systemCompletionCache.count > 400 { self.systemCompletionCache.removeAll() }
+                self.systemCompletionCache[lower] = comps
+                if !comps.isEmpty { self.onAsyncResult?() }
+            }
+        }
     }
 
     private func matchCase(of prefix: String, _ word: String) -> String {
@@ -225,12 +264,69 @@ final class TextEngine {
     private var correctionCache: [String: String?] = [:]
     private var systemCompletionCache: [String: [String]] = [:]
 
+    /// Autokorrektur für ein Wort. Blockiert nur, wenn das Ergebnis noch nicht im Hintergrund berechnet wurde.
     func correction(for word: String) -> String? {
+        guard correctionCandidate(word) else { return nil }
         if let c = correctionCache[word] { return c }
-        let r = correctionUncached(for: word)
+        let r = checkQueue.sync { bgCorrection(word) }
+        storeCorrection(word, r)
+        return r
+    }
+
+    /// Nicht blockierend: .some = Ergebnis bekannt, nil = wird gerade im Hintergrund berechnet.
+    func cachedCorrection(for word: String) -> String?? {
+        guard correctionCandidate(word) else { return .some(nil) }
+        if let c = correctionCache[word] { return .some(c) }
+        prefetch(word)
+        return nil
+    }
+
+    /// Schlägt Schreibweise und Korrektur eines Wortes schon beim Tippen im Hintergrund nach,
+    /// damit Leiste und Leerzeichen sofort fertig sind.
+    func prefetch(_ word: String) {
+        guard word.count >= 2 else { return }
+        let needsCorr = correctionCandidate(word) && correctionCache[word] == nil
+        let needsSpell = spelledCache[word] == nil
+        guard needsCorr || needsSpell, !inFlight.contains(word) else { return }
+        inFlight.insert(word)
+        latestLock.lock(); latestWord = word; latestLock.unlock()
+        checkQueue.async { [weak self] in
+            guard let self else { return }
+            self.latestLock.lock(); let current = self.latestWord; self.latestLock.unlock()
+            // Inzwischen weitergetippt? Dann diesen Auftrag überspringen.
+            guard current == word else {
+                DispatchQueue.main.async { self.inFlight.remove(word) }
+                return
+            }
+            let spelled = self.bgSpelledCorrectly(word)
+            let corr: String?? = needsCorr ? .some(spelled ? nil : self.bgCorrection(word)) : nil
+            DispatchQueue.main.async {
+                self.inFlight.remove(word)
+                self.storeSpelled(word, spelled)
+                if let corr { self.storeCorrection(word, corr) }
+                self.onAsyncResult?()
+            }
+        }
+    }
+
+    private func storeCorrection(_ word: String, _ r: String?) {
         if correctionCache.count > 600 { correctionCache.removeAll() }
         correctionCache[word] = .some(r)
-        return r
+    }
+
+    private func storeSpelled(_ word: String, _ r: Bool) {
+        if spelledCache.count > 1500 { spelledCache.removeAll() }
+        spelledCache[word] = r
+    }
+
+    /// Schnelle Vorprüfung auf dem Haupt-Thread (nur Speicher): Kommt eine Korrektur überhaupt infrage?
+    private func correctionCandidate(_ word: String) -> Bool {
+        guard word.count >= 2,
+              word.rangeOfCharacter(from: .decimalDigits) == nil,
+              word.rangeOfCharacter(from: CharacterSet.letters.inverted.subtracting(CharacterSet(charactersIn: "-'"))) == nil,
+              !isKnown(word) else { return false }
+        if word == word.uppercased() { return false } // Abkürzungen
+        return true
     }
 
     /// Richtige Großschreibung (Nomen) für Vorschläge aus der Wortliste – zwischengespeichert.
@@ -256,38 +352,36 @@ final class TextEngine {
         learnedIndex = idx
     }
 
-    private func correctionUncached(for word: String) -> String? {
-        guard word.count >= 2,
-              word.rangeOfCharacter(from: .decimalDigits) == nil,
-              word.rangeOfCharacter(from: CharacterSet.letters.inverted.subtracting(CharacterSet(charactersIn: "-'"))) == nil,
-              !isKnown(word) else { return nil }
-        if word.count > 1, word == word.uppercased() { return nil } // Abkürzungen
+    /// NUR auf `checkQueue`: Korrektur über das Systemwörterbuch (ohne gelernte Wörter – die prüft der Haupt-Thread).
+    private func bgCorrection(_ word: String) -> String? {
+        if let c = bgCorr[word] { return c }
+        bgWarmUp()
         let ns = word as NSString
         let range = NSRange(location: 0, length: ns.length)
+        var result: String?
         let miss = checker.rangeOfMisspelledWord(in: word, range: range, startingAt: 0, wrap: false, language: language)
-        guard miss.location != NSNotFound else { return nil }
-        // Auch im Englischen korrekt? Dann nicht korrigieren.
-        if !warmedUp { warmUp() }
-        if let en = englishLanguage {
-            let missEN = checker.rangeOfMisspelledWord(in: word, range: range, startingAt: 0, wrap: false, language: en)
-            if missEN.location == NSNotFound { return nil }
+        var englishOK = false
+        if miss.location != NSNotFound, let en = englishLanguage {
+            englishOK = checker.rangeOfMisspelledWord(in: word, range: range, startingAt: 0, wrap: false, language: en).location == NSNotFound
         }
-        let guesses = checker.guesses(forWordRange: range, in: word, language: language) ?? []
-        let maxDist: Double = word.count <= 4 ? 1 : 2
-        let lw = word.lowercased()
-        var best: (String, Double, Int)?
-        for g in guesses.prefix(8) where !g.contains(" ") {
-            let d = Self.keyboardDistance(lw, g.lowercased())
-            guard d <= maxDist else { continue }
-            let rank = CommonWords.rank[g.lowercased()] ?? Int.max
-            if best == nil || d < best!.1 - 0.01 || (abs(d - best!.1) < 0.01 && rank < best!.2) {
-                best = (g, d, rank)
+        if miss.location != NSNotFound, !englishOK {
+            let guesses = checker.guesses(forWordRange: range, in: word, language: language) ?? []
+            let maxDist: Double = word.count <= 4 ? 1 : 2
+            let lw = word.lowercased()
+            var best: (String, Double, Int)?
+            for g in guesses.prefix(8) where !g.contains(" ") {
+                let d = Self.keyboardDistance(lw, g.lowercased())
+                guard d <= maxDist else { continue }
+                let rank = CommonWords.rank[g.lowercased()] ?? Int.max
+                if best == nil || d < best!.1 - 0.01 || (abs(d - best!.1) < 0.01 && rank < best!.2) {
+                    best = (g, d, rank)
+                }
             }
+            if let best { result = matchCase(of: word, best.0).replacingFirstCaseIfNoun(original: word, guess: best.0) }
         }
-        if let best {
-            return matchCase(of: word, best.0).replacingFirstCaseIfNoun(original: word, guess: best.0)
-        }
-        return nil
+        if bgCorr.count > 1500 { bgCorr.removeAll() }
+        bgCorr[word] = .some(result)
+        return result
     }
 
     // MARK: - Gesten-Tippen
@@ -311,20 +405,27 @@ final class TextEngine {
     /// Richtig geschrieben laut Systemwörterbuch (Deutsch oder Englisch)? Mit Zwischenspeicher.
     func spelledCorrectly(_ word: String) -> Bool {
         if let c = spelledCache[word] { return c }
-        let r = spelledCorrectlyUncached(word)
-        if spelledCache.count > 1500 { spelledCache.removeAll() }
-        spelledCache[word] = r
+        let r = checkQueue.sync { bgSpelledCorrectly(word) }
+        storeSpelled(word, r)
         return r
     }
 
-    private func spelledCorrectlyUncached(_ word: String) -> Bool {
+    /// Nur auf `checkQueue` aufrufen (z. B. innerhalb von `onCheckQueue`).
+    func spelledOnQueue(_ word: String) -> Bool { bgSpelledCorrectly(word) }
+
+    /// NUR auf `checkQueue`.
+    private func bgSpelledCorrectly(_ word: String) -> Bool {
+        if let c = bgSpelled[word] { return c }
+        bgWarmUp()
         let ns = word as NSString
         let range = NSRange(location: 0, length: ns.length)
-        if checker.rangeOfMisspelledWord(in: word, range: range, startingAt: 0, wrap: false, language: language).location == NSNotFound { return true }
-        if !warmedUp { warmUp() }
-        if let en = englishLanguage,
-           checker.rangeOfMisspelledWord(in: word, range: range, startingAt: 0, wrap: false, language: en).location == NSNotFound { return true }
-        return false
+        var ok = checker.rangeOfMisspelledWord(in: word, range: range, startingAt: 0, wrap: false, language: language).location == NSNotFound
+        if !ok, let en = englishLanguage {
+            ok = checker.rangeOfMisspelledWord(in: word, range: range, startingAt: 0, wrap: false, language: en).location == NSNotFound
+        }
+        if bgSpelled.count > 3000 { bgSpelled.removeAll() }
+        bgSpelled[word] = ok
+        return ok
     }
 
     func casedLike(_ typed: String, _ word: String) -> String { matchCase(of: typed, word) }
@@ -352,15 +453,16 @@ final class TextEngine {
         if capCount >= 3, capCount > lowCount * 2 { return cap }
         if CommonWords.german.contains(cap) { return cap }
         if CommonWords.set.contains(word), CommonWords.german.contains(word) { return word }
-        // Systemwörterbuch: klein falsch, groß richtig → Nomen
-        let ns = word as NSString
-        let lowWrong = checker.rangeOfMisspelledWord(in: word, range: NSRange(location: 0, length: ns.length), startingAt: 0, wrap: false, language: language).location != NSNotFound
-        if lowWrong {
+        // Systemwörterbuch: klein falsch, groß richtig → Nomen (auf der Wörterbuch-Warteschlange)
+        let isNoun: Bool = checkQueue.sync {
+            bgWarmUp()
+            let ns = word as NSString
+            let lowWrong = checker.rangeOfMisspelledWord(in: word, range: NSRange(location: 0, length: ns.length), startingAt: 0, wrap: false, language: language).location != NSNotFound
+            guard lowWrong else { return false }
             let capNS = cap as NSString
-            let capWrong = checker.rangeOfMisspelledWord(in: cap, range: NSRange(location: 0, length: capNS.length), startingAt: 0, wrap: false, language: language).location != NSNotFound
-            if !capWrong { return cap }
+            return checker.rangeOfMisspelledWord(in: cap, range: NSRange(location: 0, length: capNS.length), startingAt: 0, wrap: false, language: language).location == NSNotFound
         }
-        return word
+        return isNoun ? cap : word
     }
 
     // MARK: - Lernen
@@ -373,7 +475,6 @@ final class TextEngine {
         if isNew {
             let lw = word.lowercased()
             if let f = lw.first { learnedIndex[f, default: [:]][word] = lw }
-            correctionCache.removeAll()
         }
         // Zwischenspeicher fürs Wischen nur ab und zu neu bauen (spart Arbeit bei jedem Wort)
         learnsSinceCache += 1

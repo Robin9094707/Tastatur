@@ -282,6 +282,10 @@ final class KeyboardState: ObservableObject {
 
     init(controller: KeyboardViewController) {
         self.controller = controller
+        engine.onAsyncResult = { [weak self] in
+            guard let self, self.panel == .none || self.panel == .tools, !self.composeMode else { return }
+            self.scheduleSuggestionRefresh()
+        }
     }
 
     var proxy: UITextDocumentProxy? { controller?.textDocumentProxy }
@@ -375,7 +379,7 @@ final class KeyboardState: ObservableObject {
 
     /// Sofortiges Feedback beim Herunterdrücken einer Taste.
     func keyDownFeedback(special: Bool) {
-        if store.keySound { AudioServicesPlaySystemSound(special ? 1156 : 1104) }
+        if store.keySound { Self.playClick(special ? 1156 : 1104) }
         if store.haptics, hasFullAccess, store.hapticStrength > 0.01 {
             ensureHapticStyle()
             let base = store.hapticStrength
@@ -384,8 +388,14 @@ final class KeyboardState: ObservableObject {
         }
     }
 
+    /// Klick-Ton im Hintergrund: AudioServices kann den Haupt-Thread sonst spürbar blockieren.
+    private static let soundQueue = DispatchQueue(label: "tastatur.sound", qos: .userInteractive)
+    static func playClick(_ id: SystemSoundID) {
+        soundQueue.async { AudioServicesPlaySystemSound(id) }
+    }
+
     func feedback(_ style: UIImpactFeedbackGenerator.FeedbackStyle = .light) {
-        if store.keySound { AudioServicesPlaySystemSound(1104) }
+        if store.keySound { Self.playClick(1104) }
         if store.haptics, hasFullAccess, store.hapticStrength > 0.01 {
             ensureHapticStyle()
             let base = store.hapticStrength
@@ -850,6 +860,7 @@ final class KeyboardState: ObservableObject {
     }
 
     func scheduleRefresh() {
+        schedulePrefetch()
         if !liveEditing, !bar.issues.isEmpty { pruneIssues() }
         if !liveEditing {
             if bar.offerFixes { bar.offerFixes = false }
@@ -863,6 +874,29 @@ final class KeyboardState: ObservableObject {
         let work = DispatchWorkItem { [weak self] in self?.refreshSuggestionsNow() }
         refreshWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + refreshDelay, execute: work)
+    }
+
+    /// Nur die Vorschlagsleiste neu berechnen (z. B. wenn Wörterbuch-Ergebnisse aus dem Hintergrund da sind).
+    func scheduleSuggestionRefresh() {
+        refreshWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.refreshSuggestionsNow() }
+        refreshWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + refreshDelay, execute: work)
+    }
+
+    private var prefetchQueued = false
+    /// Direkt nach dem Tastendruck (nächster Durchlauf): Wort im Hintergrund nachschlagen lassen.
+    private func schedulePrefetch() {
+        guard !prefetchQueued, !composeMode else { return }
+        prefetchQueued = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.prefetchQueued = false
+            let word = self.currentWord
+            guard word.count >= 2, !self.isCommandLine else { return }
+            if self.store.autocorrect { self.engine.prefetch(word) }
+            self.precomputeTapFix(for: word)
+        }
     }
 
     func refreshSuggestionsNow() {
@@ -910,7 +944,8 @@ final class KeyboardState: ObservableObject {
                 list.append(Suggestion(text: macro.shortcut, kind: .macro, display: "⚡︎ " + macro.title))
             }
             var correction: String?
-            if store.autocorrect, shouldAutocorrect, !looksLikeName(word) { correction = engine.correction(for: word) }
+            // Nie blockieren: Korrektur kommt aus dem Hintergrund, die Leiste frischt sich danach auf
+            if store.autocorrect, shouldAutocorrect, !looksLikeName(word), let c = engine.cachedCorrection(for: word) { correction = c }
             list.append(Suggestion(text: word, kind: .typed, display: "„\(word)“"))
             if let correction { list.append(Suggestion(text: correction, kind: .correction)) }
             for c in engine.completions(prefix: word, previousWord: previousWord, limit: 3) where !list.contains(where: { $0.text == c }) {
@@ -2728,15 +2763,15 @@ final class KeyboardState: ObservableObject {
         return engine.isKnown(w) || SwipeDecoder.shared.rank(of: w) != nil
     }
 
-    private struct TapInputs {
+    fileprivate struct TapInputs {
         var lower: String
         var taps: [CGPoint]
         var geo: KeyGeometry
         var learned: [String: Int]
         var context: [String: Int]
     }
-    /// Im Hintergrund berechnete Tipp-Korrektur für das aktuelle Wort.
-    private var tapFix: (word: String, result: String?)?
+    /// Im Hintergrund berechnete Tipp-Korrektur für das aktuelle Wort (thread-sicher).
+    private let tapBox = TapFixBox()
 
     /// Schnelle Vorprüfung (ohne Wörterbuch-Abfragen): Kommt eine Tipp-Korrektur überhaupt infrage?
     private func tapInputs(for word: String) -> TapInputs? {
@@ -2749,7 +2784,7 @@ final class KeyboardState: ObservableObject {
                          context: previousWord.map { engine.bigramNext($0) } ?? [:])
     }
 
-    private static func computeTap(_ i: TapInputs) -> String? {
+    fileprivate static func computeTap(_ i: TapInputs) -> String? {
         guard let r = SwipeDecoder.shared.tapCorrect(typed: i.lower, taps: i.taps, centers: i.geo.centers, kw: i.geo.keyWidth,
                                                       learned: i.learned, context: i.context),
               r.word != i.lower, r.spatial <= 2.2 + Double(i.lower.count) * 0.15 else { return nil }
@@ -2760,20 +2795,33 @@ final class KeyboardState: ObservableObject {
         typed.first?.isUppercase == true ? engine.casedLike(typed, result) : engine.swipeCased(result)
     }
 
-    /// Berechnet die Tipp-Korrektur für das aktuelle Wort schon in der Pause vor (Ergebnis in `tapFix`).
+    /// Berechnet die Tipp-Korrektur für das aktuelle Wort im Hintergrund vor – das Leerzeichen ist dann sofort fertig.
     private func precomputeTapFix(for word: String) {
-        guard !word.isEmpty, store.autocorrect, tapFix?.word != word || tapFixTaps != wordTaps else { return }
-        guard let inputs = tapInputs(for: word), !engine.spelledCorrectly(word) else { tapFix = nil; return }
-        tapFix = (word, Self.computeTap(inputs))
-        tapFixTaps = wordTaps
+        guard !word.isEmpty, store.autocorrect else { return }
+        let taps = wordTaps
+        if tapBox.knows(word, taps) { return }
+        guard let inputs = tapInputs(for: word) else { return }
+        tapBox.begin(word, taps)
+        let box = tapBox, engine = self.engine
+        engine.onCheckQueue {
+            guard box.isLatest(word, taps) else { return }
+            let result = engine.spelledOnQueue(word) ? nil : KeyboardState.computeTap(inputs)
+            box.finish(word, taps, result)
+        }
     }
-    private var tapFixTaps: [CGPoint] = []
 
     /// Korrektur beim Abschließen eines Wortes: zuerst über die Fingerpositionen, sonst klassisch.
     func smartCorrection(for word: String) -> String? {
-        if let inputs = tapInputs(for: word), !engine.spelledCorrectly(word) {
+        if let inputs = tapInputs(for: word) {
+            let taps = wordTaps
+            var pre = tapBox.result(word, taps)
+            if pre == nil, tapBox.isPending(word, taps) {
+                // Läuft gerade im Hintergrund → kurz abwarten statt doppelt rechnen
+                engine.drainCheckQueue()
+                pre = tapBox.result(word, taps)
+            }
             let result: String?
-            if let f = tapFix, f.word == word, tapFixTaps == wordTaps { result = f.result } else { result = Self.computeTap(inputs) }
+            if let pre { result = pre } else { result = engine.spelledCorrectly(word) ? nil : Self.computeTap(inputs) }
             if let result { return casedTapResult(word, result) }
         }
         return engine.correction(for: word)
@@ -3192,5 +3240,37 @@ final class KeyboardState: ObservableObject {
     func setLayer(_ l: KeyboardLayer) {
         layer = l
         onHeightChange?(totalHeight)
+    }
+}
+
+/// Ergebnis der Tipp-Korrektur aus dem Hintergrund – mit Sperre, weil zwei Threads darauf zugreifen.
+final class TapFixBox {
+    private let lock = NSLock()
+    private var word = ""
+    private var taps: [CGPoint] = []
+    private var done = false
+    private var value: String?
+
+    func begin(_ w: String, _ t: [CGPoint]) {
+        lock.lock(); word = w; taps = t; done = false; value = nil; lock.unlock()
+    }
+    func isLatest(_ w: String, _ t: [CGPoint]) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return word == w && taps == t
+    }
+    func finish(_ w: String, _ t: [CGPoint], _ r: String?) {
+        lock.lock(); if word == w && taps == t { done = true; value = r }; lock.unlock()
+    }
+    /// Läuft schon oder ist fertig.
+    func knows(_ w: String, _ t: [CGPoint]) -> Bool { isLatest(w, t) }
+    func isPending(_ w: String, _ t: [CGPoint]) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return word == w && taps == t && !done
+    }
+    /// .some = fertig berechnet (auch „keine Korrektur“), nil = nicht vorhanden.
+    func result(_ w: String, _ t: [CGPoint]) -> String?? {
+        lock.lock(); defer { lock.unlock() }
+        guard word == w && taps == t && done else { return nil }
+        return .some(value)
     }
 }

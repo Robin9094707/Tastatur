@@ -1182,8 +1182,11 @@ final class KeyboardState: ObservableObject {
         switch target {
         case .apiKey:
             let key = text.replacingOccurrences(of: " ", with: "")
-            store.apiKey = key
-            if !key.isEmpty { store.aiProvider = "apikey" }
+            if key.isEmpty { store.deleteAPIKey() } else {
+                store.apiKey = key
+                store.apiKeyEnabled = true
+                store.aiProvider = "apikey"
+            }
             showToast(key.isEmpty ? "API-Schlüssel entfernt" : "API-Schlüssel gespeichert ✓")
         case .baseURL:
             store.baseURL = text.isEmpty ? "https://api.openai.com/v1" : text.replacingOccurrences(of: " ", with: "")
@@ -2038,6 +2041,7 @@ final class KeyboardState: ObservableObject {
             return
         }
         store.apiKey = s
+        store.apiKeyEnabled = true
         store.aiProvider = "apikey"
         showToast("API-Schlüssel gespeichert ✓")
     }

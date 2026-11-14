@@ -708,13 +708,17 @@ struct KeyboardSettingsPanel: View {
                     .font(.caption2).foregroundStyle(.secondary)
             }
             if store.aiProvider != "chatgpt" {
-            row("API-Schlüssel", store.hasKey ? maskedKey : "Nicht gesetzt", "key.fill") {
+            row("API-Schlüssel", store.hasStoredKey ? (store.apiKeyEnabled ? maskedKey : "Deaktiviert · \(maskedKey)") : "Nicht gesetzt", "key.fill") {
                 state.beginInput(.apiKey, prefill: "")
             }
             HStack {
                 actionButton("Aus Ablage einfügen", "doc.on.clipboard") { state.pasteAPIKey() }
-                if store.hasKey {
-                    actionButton("Entfernen", "trash") { store.apiKey = ""; state.showToast("API-Schlüssel entfernt") }
+                if store.hasStoredKey {
+                    actionButton(store.apiKeyEnabled ? "Deaktivieren" : "Aktivieren", store.apiKeyEnabled ? "pause.circle" : "play.circle") {
+                        store.apiKeyEnabled.toggle()
+                        state.showToast(store.apiKeyEnabled ? "API-Schlüssel aktiviert ✓" : "API-Schlüssel deaktiviert")
+                    }
+                    actionButton("Löschen", "trash") { store.deleteAPIKey(); state.showToast("API-Schlüssel gelöscht") }
                 }
             }
             Text("Modell").font(.caption.weight(.semibold)).foregroundStyle(.secondary)

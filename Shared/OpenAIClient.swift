@@ -10,7 +10,9 @@ enum OpenAIError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingKey:
-            return "Kein OpenAI-API-Schlüssel hinterlegt. Öffne die App „Tastatur KI“ und trage deinen Schlüssel ein."
+            return SharedStore.shared.hasStoredKey && !SharedStore.shared.apiKeyEnabled
+                ? "Der API-Schlüssel ist deaktiviert. Aktiviere ihn in der App oder unter ⚙︎ → KI & API."
+                : "Kein OpenAI-API-Schlüssel hinterlegt. Öffne die App „Tastatur KI“ und trage deinen Schlüssel ein."
         case .http(let code, let msg):
             switch code {
             case 401: return "Der API-Schlüssel ist ungültig (401)."
@@ -74,7 +76,7 @@ final class OpenAIClient {
         return b
     }
 
-    private var key: String { store.apiKey.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var key: String { store.apiKeyEnabled ? store.apiKey.trimmingCharacters(in: .whitespacesAndNewlines) : "" }
 
     private static let session: URLSession = {
         let cfg = URLSessionConfiguration.default

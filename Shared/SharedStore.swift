@@ -36,6 +36,8 @@ final class SharedStore: ObservableObject {
     static let settingsVersion = 7
 
     @Published var apiKey: String = "" { didSet { set(apiKey, "apiKey") } }
+    /// API-Schlüssel vorübergehend deaktiviert (bleibt gespeichert).
+    @Published var apiKeyEnabled: Bool = true { didSet { set(apiKeyEnabled, "apiKeyEnabled") } }
     @Published var baseURL: String = "https://api.openai.com/v1" { didSet { set(baseURL, "baseURL") } }
     @Published var chatModel: String = SharedStore.defaultChatModel { didSet { set(chatModel, "chatModel") } }
     @Published var fastModel: String = SharedStore.defaultChatModel { didSet { set(fastModel, "fastModel") } }
@@ -117,6 +119,7 @@ final class SharedStore: ObservableObject {
         let d = defaults
         migrateIfNeeded()
         upd(\.apiKey, d.string(forKey: "apiKey") ?? "")
+        upd(\.apiKeyEnabled, bool("apiKeyEnabled", true))
         upd(\.baseURL, d.string(forKey: "baseURL") ?? "https://api.openai.com/v1")
         upd(\.chatModel, d.string(forKey: "chatModel") ?? SharedStore.defaultChatModel)
         upd(\.fastModel, d.string(forKey: "fastModel") ?? SharedStore.defaultChatModel)
@@ -260,8 +263,20 @@ final class SharedStore: ObservableObject {
         profiles.first { $0.id.uuidString == activeProfileID }
     }
 
-    /// Eigener API-Schlüssel eingetragen.
-    var hasKey: Bool { !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    /// Ein API-Schlüssel ist gespeichert (egal ob aktiv).
+    var hasStoredKey: Bool { !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    /// Eigener API-Schlüssel eingetragen und aktiv.
+    var hasKey: Bool { apiKeyEnabled && hasStoredKey }
+
+    /// Löscht den API-Schlüssel vollständig (inkl. gemerkter Modellliste).
+    func deleteAPIKey() {
+        apiKey = ""
+        apiKeyEnabled = true
+        knownModels = []
+        defaults.removeObject(forKey: "apiKey")
+        if aiProvider == "apikey", !chatgptAccount.isEmpty { aiProvider = "chatgpt" }
+    }
 
     /// KI über das ChatGPT-Abo aktiv (angemeldet und ausgewählt).
     var usesChatGPT: Bool { aiProvider == "chatgpt" && !chatgptAccount.isEmpty }

@@ -14,6 +14,7 @@ struct HomeView: View {
     @State private var testing = false
     @State private var keyResult: String?
     @State private var keyOK = false
+    @State private var confirmDelete = false
     @State private var photoItem: PhotosPickerItem?
     @State private var enabled = false
     @State private var testText = ""
@@ -191,6 +192,26 @@ struct HomeView: View {
                 }
                 GlassButton(title: testing ? "Teste …" : "Speichern", symbol: "checkmark", prominent: true) { saveKey() }
             }
+            if store.hasStoredKey {
+                Toggle(isOn: $store.apiKeyEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("API-Schlüssel verwenden").font(.subheadline.weight(.semibold))
+                        Text(store.apiKeyEnabled ? "Aktiv" : "Deaktiviert – bleibt gespeichert, wird aber nicht benutzt")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                GlassButton(title: "Schlüssel löschen", symbol: "trash") { confirmDelete = true }
+                    .confirmationDialog("API-Schlüssel wirklich löschen?", isPresented: $confirmDelete, titleVisibility: .visible) {
+                        Button("Endgültig löschen", role: .destructive) { deleteKey() }
+                        Button("Abbrechen", role: .cancel) {}
+                    } message: {
+                        Text("Der Schlüssel wird vollständig von diesem Gerät entfernt.")
+                    }
+                if !store.usesAppGroup {
+                    Text("Ohne App Group gilt das nur für die App – in der Tastatur unter ⚙︎ → KI & API ebenfalls löschen/deaktivieren.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
             if let keyResult {
                 Label(keyResult, systemImage: keyOK ? "checkmark.circle.fill" : "xmark.octagon.fill")
                     .font(.caption)
@@ -202,9 +223,19 @@ struct HomeView: View {
         }
     }
 
+    private func deleteKey() {
+        store.deleteAPIKey()
+        keyDraft = ""
+        revealKey = false
+        keyOK = true
+        keyResult = "API-Schlüssel vollständig gelöscht ✓"
+    }
+
     private func saveKey() {
-        store.apiKey = keyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard store.hasKey else { keyResult = "Schlüssel entfernt"; keyOK = true; return }
+        let draft = keyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !draft.isEmpty else { deleteKey(); return }
+        store.apiKey = draft
+        store.apiKeyEnabled = true
         store.aiProvider = "apikey"
         testing = true
         keyResult = nil

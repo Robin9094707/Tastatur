@@ -10,13 +10,6 @@ struct HomeView: View {
             VStack(spacing: 18) {
                 hero
                 if !store.hasAPIKey { apiKeyHint }
-                NavigationLink { WorkshopView() } label: {
-                    GlassCard(tint: Theme.tint(store.keyboardTint).opacity(0.35)) {
-                        CardHeader(title: "KI-Werkstatt", symbol: "wand.and.stars.inverse",
-                                   subtitle: "Lange Texte einfügen und zusammenfassen, korrigieren, übersetzen – ohne Längenlimit.")
-                    }
-                }
-                .buttonStyle(.plain)
                 tipsCard
                 setupCard
                 statsCard
@@ -71,7 +64,8 @@ struct HomeView: View {
             tip("sparkles", "Tippe in der Tastatur auf ✨ für KI, Ablage, Makros und Emojis.")
             tip("wand.and.stars", "Der Zauberstab rechts öffnet direkt die KI-Aktionen.")
             tip("character.cursor.ibeam", "Markiere Text, damit die KI nur diesen bearbeitet – sonst wird der ganze Text im Feld genutzt.")
-            tip("doc.on.clipboard", "Riesige Texte (z. B. Artikel, Mails): kopieren und in der Tastatur „Quelle: Zwischenablage“ wählen.")
+            tip("textformat", "Formatieren, Zusammenfassen, Korrigieren & Übersetzen – alles direkt in der Tastatur über den Zauberstab.")
+            tip("doc.on.clipboard", "Riesige Texte (z. B. Artikel, Mails): kopieren und in der Tastatur „Quelle: Ablage“ wählen.")
             tip("arrow.left.and.right", "Wische über die Leertaste, um den Cursor zu bewegen.")
             tip("hand.point.up.left", "Halte Buchstaben gedrückt für Umlaute und Akzente (s → ß).")
         }
@@ -111,151 +105,6 @@ struct HomeView: View {
             Text(label).font(.caption2).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
-    }
-}
-
-/// In der App: beliebig lange Texte mit KI bearbeiten.
-struct WorkshopView: View {
-    @EnvironmentObject var store: SharedStore
-    @State private var input = ""
-    @State private var output = ""
-    @State private var original = ""
-    @State private var busy = false
-    @State private var error: String?
-    @State private var showDiff = false
-    @State private var task: Task<Void, Never>?
-    @State private var customPrompt = ""
-
-    var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                GlassCard {
-                    HStack {
-                        CardHeader(title: "Dein Text", symbol: "doc.plaintext", subtitle: "\(input.wordCount) Wörter · \(input.count) Zeichen")
-                    }
-                    TextField("Text hier einfügen oder tippen …", text: $input, axis: .vertical)
-                        .lineLimit(6...16)
-                        .padding(12)
-                        .glass(cornerRadius: 14)
-                    HStack {
-                        GlassButton(title: "Einfügen", symbol: "doc.on.clipboard") {
-                            if let s = UIPasteboard.general.string { input = s }
-                        }
-                        GlassButton(title: "Leeren", symbol: "trash") { input = ""; output = "" }
-                    }
-                }
-
-                ForEach([ActionCategory.summary, .edit, .tone, .translate, .custom]) { cat in
-                    let items = store.actions.filter { $0.enabled && $0.category == cat }
-                    if !items.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(cat.label).font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.leading, 4)
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 8) {
-                                    ForEach(items) { action in
-                                        Button { run(action.prompt, diff: action.showDiff) } label: {
-                                            Label(action.title, systemImage: action.symbol)
-                                                .font(.subheadline.weight(.semibold))
-                                                .padding(.horizontal, 14)
-                                                .frame(height: 40)
-                                                .glassCapsule(interactive: true)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .disabled(busy)
-                                    }
-                                }
-                                .padding(.horizontal, 2)
-                            }
-                        }
-                    }
-                }
-
-                GlassCard {
-                    CardHeader(title: "Eigene Anweisung", symbol: "text.bubble")
-                    HStack {
-                        TextField("z. B. Schreib daraus eine LinkedIn-Post", text: $customPrompt)
-                            .padding(10)
-                            .glass(cornerRadius: 12)
-                        Button { run(customPrompt, diff: false) } label: {
-                            Image(systemName: "arrow.up.circle.fill").font(.title)
-                        }
-                        .disabled(customPrompt.isEmpty || busy)
-                    }
-                }
-
-                if busy || !output.isEmpty || error != nil {
-                    GlassCard(tint: Theme.tint(store.keyboardTint).opacity(0.2)) {
-                        HStack {
-                            CardHeader(title: "Ergebnis", symbol: "sparkles", subtitle: output.isEmpty ? nil : "\(output.wordCount) Wörter")
-                            if busy {
-                                Button("Stopp") { task?.cancel(); busy = false }.buttonStyle(.bordered)
-                            }
-                        }
-                        if let error {
-                            Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.subheadline)
-                        }
-                        if showDiff, !busy, let segs = TextDiff.segments(original: original, revised: output) {
-                            diffText(segs).textSelection(.enabled)
-                        } else {
-                            Text(output.isEmpty ? "…" : output).textSelection(.enabled)
-                        }
-                        if !busy && !output.isEmpty {
-                            HStack {
-                                GlassButton(title: "Kopieren", symbol: "doc.on.doc", prominent: true) {
-                                    UIPasteboard.general.string = output
-                                    store.addClip(output)
-                                }
-                                GlassButton(title: "Übernehmen", symbol: "arrow.up.doc") {
-                                    input = output
-                                    output = ""
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            .padding(16)
-        }
-        .glassBackground()
-        .navigationTitle("KI-Werkstatt")
-        .scrollDismissesKeyboard(.interactively)
-    }
-
-    private func diffText(_ segs: [TextDiff.Segment]) -> Text {
-        var attr = AttributedString()
-        for s in segs {
-            var part = AttributedString(s.text)
-            if s.changed {
-                part.swiftUI.foregroundColor = .green
-                part.swiftUI.font = .body.bold()
-            }
-            attr += part
-        }
-        return Text(attr)
-    }
-
-    private func run(_ instruction: String, diff: Bool) {
-        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { error = "Füge zuerst einen Text ein."; return }
-        busy = true
-        error = nil
-        output = ""
-        original = text
-        showDiff = diff
-        store.incrementStat("aiActions")
-        task = Task {
-            do {
-                let result = try await OpenAIClient().transform(text: text, instruction: instruction) { partial in
-                    Task { @MainActor in output = partial }
-                }
-                await MainActor.run { output = result; busy = false }
-            } catch {
-                await MainActor.run {
-                    if !(error is CancellationError) { self.error = error.localizedDescription }
-                    busy = false
-                }
-            }
-        }
     }
 }
 

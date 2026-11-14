@@ -26,8 +26,6 @@ struct TastaturApp: App {
     private func handle(_ url: URL) {
         guard url.scheme == "tastatur" else { return }
         switch url.host ?? "" {
-        case "werkstatt", "workshop":
-            selectedTab = 0
         case "settings", "ki":
             selectedTab = 1
         case "macros", "makros":

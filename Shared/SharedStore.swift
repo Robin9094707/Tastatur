@@ -33,7 +33,7 @@ final class SharedStore: ObservableObject {
 
     static let defaultChatModel = "gpt-6-luna"
     static let fallbackModels = ["gpt-6-luna", "gpt-5.6-luna", "gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"]
-    static let settingsVersion = 3
+    static let settingsVersion = 4
 
     @Published var apiKey: String = "" { didSet { set(apiKey, "apiKey") } }
     @Published var baseURL: String = "https://api.openai.com/v1" { didSet { set(baseURL, "baseURL") } }

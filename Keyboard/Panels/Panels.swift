@@ -13,7 +13,8 @@ struct AIPanel: View {
                     MissingSetupBanner(state: state)
                 }
                 sourcePicker
-                ForEach([ActionCategory.summary, .edit, .tone, .translate, .custom]) { cat in
+                quickFormat
+                ForEach([ActionCategory.summary, .format, .edit, .tone, .translate, .custom]) { cat in
                     let items = store.actions.filter { $0.enabled && $0.category == cat }
                     if !items.isEmpty {
                         section(cat, items)
@@ -33,6 +34,39 @@ struct AIPanel: View {
             sourceChip("Ablage", "doc.on.clipboard", .clipboard)
             Spacer(minLength: 0)
         }
+    }
+
+    /// Sofort-Formatierung ohne KI.
+    private var quickFormat: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("SOFORT (OHNE KI)")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 4)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    formatChip("ABC", "Großbuchstaben") { state.localFormat(.upper) }
+                    formatChip("abc", "Kleinbuchstaben") { state.localFormat(.lower) }
+                    formatChip("Abc", "Wortanfänge groß") { state.localFormat(.title) }
+                    formatChip("Satz.", "Satzanfänge groß") { state.localFormat(.sentence) }
+                    formatChip("␣", "Leerzeichen bereinigen") { state.localFormat(.cleanSpaces) }
+                }
+                .padding(.horizontal, 2)
+            }
+        }
+    }
+
+    private func formatChip(_ label: String, _ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Text(label).font(.system(size: 14, weight: .bold, design: .rounded)).foregroundStyle(state.tint)
+                Text(title).font(.caption.weight(.semibold))
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 34)
+            .glassCapsule(interactive: true)
+        }
+        .buttonStyle(.plain)
     }
 
     private func sourceChip(_ title: String, _ symbol: String, _ mode: AIScope) -> some View {

@@ -446,8 +446,10 @@ final class KeysView: UIView {
             guard let k = key(at: p) else { continue }
             // Schnelles Tippen: vorherige Zeichen-Taste sofort auslösen (Rollover)
             for id in touchOrder {
-                if let info = touches[id], !info.handled, case .char = info.key.kind, !info.alternatesActive {
-                    commit(info)
+                guard let info = touches[id], !info.handled, !info.alternatesActive, !info.cursorMode else { continue }
+                switch info.key.kind {
+                case .char, .space, .returnKey: commit(info)
+                default: break
                 }
             }
             let info = TouchInfo(key: k, startPoint: p)
@@ -499,16 +501,25 @@ final class KeysView: UIView {
 
     override func touchesCancelled(_ set: Set<UITouch>, with event: UIEvent?) {
         for t in set {
-            let id = ObjectIdentifier(t)
-            guard let info = touches[id] else { continue }
-            if case .delete = info.key.kind { state?.stopDelete() }
-            finish(id)
+            finish(ObjectIdentifier(t))
+        }
+    }
+
+    /// Sicherheitsnetz: Wird das Tastenfeld entfernt, laufen keine Wiederholungen weiter.
+    override func willMove(toWindow newWindow: UIWindow?) {
+        super.willMove(toWindow: newWindow)
+        if newWindow == nil {
+            state?.stopDelete()
+            for id in Array(touches.keys) { finish(id) }
+            popup.hide()
+            alternates.isHidden = true
         }
     }
 
     private func finish(_ id: ObjectIdentifier) {
         guard let info = touches[id] else { return }
         info.longPressTimer?.invalidate()
+        if case .delete = info.key.kind { state?.stopDelete() }
         info.key.setPressed(false)
         touches[id] = nil
         touchOrder.removeAll { $0 == id }

@@ -28,11 +28,12 @@ struct ContextProfile: Codable, Identifiable, Hashable {
 }
 
 enum ActionCategory: String, Codable, CaseIterable, Identifiable {
-    case summary, edit, tone, translate, custom
+    case summary, format, edit, tone, translate, custom
     var id: String { rawValue }
     var label: String {
         switch self {
         case .summary: return "Zusammenfassen"
+        case .format: return "Formatieren"
         case .edit: return "Bearbeiten"
         case .tone: return "Ton"
         case .translate: return "Übersetzen"
@@ -109,6 +110,25 @@ extension AIAction {
         AIAction(title: "To-dos", symbol: "checklist",
                  prompt: "Extrahiere alle Aufgaben, Fristen, Termine und Verantwortlichkeiten als Liste (Zeilen beginnen mit „☐ “). Wenn es keine gibt, schreibe „Keine Aufgaben gefunden.“",
                  builtIn: true, category: .summary),
+        // Formatieren
+        AIAction(title: "Als E-Mail", symbol: "envelope",
+                 prompt: "Formatiere den Inhalt als vollständige, gut strukturierte E-Mail mit passender Anrede, klaren Absätzen und Grußformel. Inhalt nicht erfinden.",
+                 builtIn: true, category: .format),
+        AIAction(title: "Als Nachricht", symbol: "message",
+                 prompt: "Formatiere den Inhalt als kurze, natürliche Chat-Nachricht (WhatsApp/iMessage-Stil), ohne Betreff und ohne steife Floskeln.",
+                 builtIn: true, category: .format),
+        AIAction(title: "Liste", symbol: "list.bullet",
+                 prompt: "Formatiere den Inhalt als übersichtliche Liste (Zeilen beginnen mit „• “). Wortlaut so weit wie möglich beibehalten.",
+                 builtIn: true, category: .format),
+        AIAction(title: "Nummeriert", symbol: "list.number",
+                 prompt: "Formatiere den Inhalt als nummerierte Liste (1., 2., 3. …). Wortlaut so weit wie möglich beibehalten.",
+                 builtIn: true, category: .format),
+        AIAction(title: "Absätze", symbol: "text.alignleft",
+                 prompt: "Teile den Text in sinnvolle, gut lesbare Absätze auf. Wortlaut exakt beibehalten, nur Zeilenumbrüche ändern.",
+                 builtIn: true, category: .format),
+        AIAction(title: "Überschriften", symbol: "textformat.size",
+                 prompt: "Gliedere den Text mit kurzen Zwischenüberschriften (eigene Zeile, ohne Markdown-Zeichen) und Absätzen. Inhalt beibehalten.",
+                 builtIn: true, category: .format),
         // Bearbeiten
         AIAction(title: "Korrigieren", symbol: "checkmark.seal",
                  prompt: "Korrigiere ausschließlich Rechtschreibung, Grammatik, Zeichensetzung und Groß-/Kleinschreibung. Ändere weder Wortwahl, Stil, Inhalt noch Formatierung (Zeilenumbrüche, Emojis, Listen bleiben exakt erhalten). Ist der Text fehlerfrei, gib ihn unverändert zurück.",
@@ -124,9 +144,6 @@ extension AIAction {
                  builtIn: true, category: .edit),
         AIAction(title: "Ausbauen", symbol: "text.badge.plus",
                  prompt: "Baue den Text ausführlicher und überzeugender aus, ohne Fakten zu erfinden.",
-                 builtIn: true, category: .edit),
-        AIAction(title: "Gliedern", symbol: "text.alignleft",
-                 prompt: "Strukturiere den Text übersichtlich mit sinnvollen Absätzen. Inhalt und Wortlaut bleiben so weit wie möglich erhalten.",
                  builtIn: true, category: .edit),
         AIAction(title: "Antworten", symbol: "arrowshape.turn.up.left",
                  prompt: "Der Text ist eine Nachricht, die ich erhalten habe. Schreibe eine passende, natürliche Antwort darauf in meinem Stil. Gib nur die Antwort zurück.",

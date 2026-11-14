@@ -275,7 +275,7 @@ final class KeyboardState: ObservableObject {
                 afterCommit()
                 return
             }
-            if store.autocorrect, shouldAutocorrect, let corr = engine.correction(for: word), corr != word {
+            if store.autocorrect, shouldAutocorrect, !looksLikeName(word), let corr = engine.correction(for: word), corr != word {
                 deleteChars(word.count)
                 proxy?.insertText(corr + trailing)
                 undoCorrection = (word, corr, trailing)
@@ -289,6 +289,14 @@ final class KeyboardState: ObservableObject {
         proxy?.insertText(trailing)
         undoCorrection = nil
         afterCommit()
+    }
+
+    /// Großgeschriebenes Wort mitten im Satz → vermutlich Name/Marke, nicht korrigieren.
+    private func looksLikeName(_ word: String) -> Bool {
+        guard let first = word.first, first.isUppercase else { return false }
+        let head = before.dropLast(word.count).trimmingCharacters(in: .whitespaces)
+        guard let last = head.last else { return false }
+        return !".!?\n:".contains(last)
     }
 
     private var shouldAutocorrect: Bool {
@@ -339,9 +347,13 @@ final class KeyboardState: ObservableObject {
         tapDelete()
         deleteCount = 0
         deleteTimer?.invalidate()
-        deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
-            self?.deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.07, repeats: true) { [weak self] _ in
-                guard let self else { return }
+        let started = Date()
+        deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.45, repeats: false) { [weak self] _ in
+            guard let self, self.deleteTimer != nil else { return }
+            self.deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.075, repeats: true) { [weak self] timer in
+                guard let self else { timer.invalidate(); return }
+                // Sicherheitsnetz gegen „hängende“ Löschtaste
+                if Date().timeIntervalSince(started) > 12 { self.stopDelete(); return }
                 self.deleteCount += 1
                 if self.deleteCount > 15, !self.composeMode {
                     self.deleteWord()
@@ -438,7 +450,7 @@ final class KeyboardState: ObservableObject {
                 list.append(Suggestion(text: macro.shortcut, kind: .macro, display: "⚡︎ " + macro.title))
             }
             var correction: String?
-            if store.autocorrect, shouldAutocorrect { correction = engine.correction(for: word) }
+            if store.autocorrect, shouldAutocorrect, !looksLikeName(word) { correction = engine.correction(for: word) }
             list.append(Suggestion(text: word, kind: .typed, display: "„\(word)“"))
             if let correction { list.append(Suggestion(text: correction, kind: .correction)) }
             for c in engine.completions(prefix: word, previousWord: previousWord, limit: 3) where !list.contains(where: { $0.text == c }) {
@@ -966,6 +978,70 @@ final class KeyboardState: ObservableObject {
 
     func openApp(_ path: String = "") {
         if let url = URL(string: "tastatur://\(path)") { controller?.openURL(url) }
+    }
+
+    // MARK: - Lokales Formatieren (ohne KI, sofort)
+
+    enum LocalFormat { case upper, lower, title, sentence, cleanSpaces }
+
+    func localFormat(_ f: LocalFormat) {
+        feedback(.medium)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if self.sourceMode == .clipboard {
+                guard self.hasFullAccess, let s = UIPasteboard.general.string, !s.isEmpty else {
+                    self.showToast("Die Zwischenablage ist leer.")
+                    return
+                }
+                UIPasteboard.general.string = Self.format(s, f)
+                self.lastChangeCount = UIPasteboard.general.changeCount
+                self.showToast("Zwischenablage formatiert ✓")
+                return
+            }
+            let sel = self.selected
+            let text: String
+            if !sel.isEmpty {
+                text = sel
+                self.replaceTarget = .selection
+            } else {
+                text = await self.readFullText()
+                self.replaceTarget = .all(length: text.count)
+            }
+            guard !text.isEmpty else { self.showToast("Kein Text vorhanden."); return }
+            let out = Self.format(text, f)
+            guard out != text else { self.showToast("Schon passend formatiert ✓"); return }
+            self.aiResult = out
+            self.aiBusy = false
+            self.applyResult(replace: true)
+        }
+    }
+
+    static func format(_ text: String, _ f: LocalFormat) -> String {
+        let de = Locale(identifier: "de_DE")
+        switch f {
+        case .upper: return text.uppercased(with: de)
+        case .lower: return text.lowercased(with: de)
+        case .title: return text.capitalized(with: de)
+        case .sentence:
+            var result = ""
+            var capNext = true
+            for ch in text.lowercased(with: de) {
+                if capNext, ch.isLetter {
+                    result += String(ch).uppercased(with: de)
+                    capNext = false
+                } else {
+                    result.append(ch)
+                }
+                if ".!?\n".contains(ch) { capNext = true }
+            }
+            return result
+        case .cleanSpaces:
+            var t = text.replacingOccurrences(of: "[ \t]+", with: " ", options: .regularExpression)
+            t = t.replacingOccurrences(of: " +([.,!?;:])", with: "$1", options: .regularExpression)
+            t = t.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+            t = t.replacingOccurrences(of: " *\n *", with: "\n", options: .regularExpression)
+            return t.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
     }
 
     // MARK: - Emojis

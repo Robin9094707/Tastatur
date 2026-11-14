@@ -2159,6 +2159,7 @@ final class KeyboardState: ObservableObject {
     func runEndCheck(manual: Bool) {
         if manual {
             guard requireAI() else { return }
+            if panel == .tools { panel = .none; onHeightChange?(totalHeight) }
         } else {
             guard store.aiCorrectMode == "end", hasFullAccess, store.hasAPIKey, panel == .none, !composeMode,
                   shouldAutocorrect, !isCommandLine, !liveEditing else { return }

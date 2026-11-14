@@ -212,8 +212,7 @@ struct ResultPanel: View {
     }
 
     private var resultText: Text {
-        if state.aiShowDiff, diffMode, !state.aiBusy, !state.aiOriginal.isEmpty,
-           let segs = TextDiff.segments(original: state.aiOriginal, revised: state.aiResult) {
+        if state.aiShowDiff, diffMode, !state.aiBusy, let segs = state.aiDiff {
             var attr = AttributedString()
             for s in segs {
                 var part = AttributedString(s.text)
@@ -236,8 +235,10 @@ struct ResultPanel: View {
                     Text("\(state.aiOriginal.wordCount) → \(state.aiResult.wordCount) Wörter")
                 }
                 if state.aiShowDiff, !state.aiOriginal.isEmpty {
-                    let changes = TextDiff.changeCount(original: state.aiOriginal, revised: state.aiResult)
-                    Text(changes == 0 ? "✓ Keine Fehler gefunden" : "\(changes) Änderungen markiert")
+                    if state.aiDiff != nil {
+                        let changes = state.aiChangeCount
+                        Text(changes == 0 ? "✓ Keine Fehler gefunden" : "\(changes) Änderungen markiert")
+                    }
                     Spacer()
                     Button(diffMode ? "Markierung aus" : "Markierung an") { diffMode.toggle() }
                 } else {
@@ -342,7 +343,7 @@ struct ClipboardPanel: View {
                             HStack(alignment: .center, spacing: 10) {
                                 Button { state.pasteClip(item) } label: {
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text(item.text)
+                                        Text(String(item.text.prefix(240)))
                                             .font(.system(size: 14))
                                             .lineLimit(2)
                                             .frame(maxWidth: .infinity, alignment: .leading)

@@ -1,12 +1,36 @@
 import SwiftUI
 import UIKit
+import ImageIO
 
 /// Liquid-Glass-Helfer: nutzt unter iOS 26 die echten Glas-Effekte,
 /// fällt auf älteren Systemen auf Material zurück.
+enum GlassConfig {
+    /// In der Tastatur-Erweiterung: leichte Glas-Optik ohne teure Backdrop-Ebenen
+    /// (spart viel Speicher – Tastaturen haben ein strenges Limit).
+    static var lightweight = false
+}
+
+private struct LightGlass<S: InsettableShape>: ViewModifier {
+    let shape: S
+    let tint: Color?
+    @Environment(\.colorScheme) private var scheme
+
+    func body(content: Content) -> some View {
+        content.background(
+            shape
+                .fill(scheme == .dark ? Color.white.opacity(0.10) : Color.white.opacity(0.55))
+                .overlay(shape.fill((tint ?? .clear).opacity(0.85)))
+                .overlay(shape.strokeBorder(LinearGradient(colors: [.white.opacity(scheme == .dark ? 0.28 : 0.9), .white.opacity(0.04)], startPoint: .top, endPoint: .bottom), lineWidth: 0.7))
+        )
+    }
+}
+
 extension View {
     @ViewBuilder
-    func glass(cornerRadius: CGFloat = 16, tint: Color? = nil, interactive: Bool = false) -> some View {
-        if #available(iOS 26.0, *) {
+    func glass(cornerRadius: CGFloat = 16, tint: Color? = nil, interactive: Bool = false, force: Bool = false) -> some View {
+        if GlassConfig.lightweight && !force {
+            self.modifier(LightGlass(shape: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous), tint: tint))
+        } else if #available(iOS 26.0, *) {
             let base: Glass = tint.map { Glass.regular.tint($0) } ?? .regular
             self.glassEffect(interactive ? base.interactive() : base, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         } else {
@@ -28,8 +52,10 @@ extension View {
     }
 
     @ViewBuilder
-    func glassCapsule(tint: Color? = nil, interactive: Bool = false) -> some View {
-        if #available(iOS 26.0, *) {
+    func glassCapsule(tint: Color? = nil, interactive: Bool = false, force: Bool = false) -> some View {
+        if GlassConfig.lightweight && !force {
+            self.modifier(LightGlass(shape: Capsule(), tint: tint))
+        } else if #available(iOS 26.0, *) {
             let base: Glass = tint.map { Glass.regular.tint($0) } ?? .regular
             self.glassEffect(interactive ? base.interactive() : base, in: Capsule())
         } else {
@@ -48,7 +74,9 @@ struct GlassGroup<Content: View>: View {
     @ViewBuilder var content: () -> Content
 
     var body: some View {
-        if #available(iOS 26.0, *) {
+        if GlassConfig.lightweight {
+            content()
+        } else if #available(iOS 26.0, *) {
             GlassEffectContainer(spacing: spacing) { content() }
         } else {
             content()
@@ -135,7 +163,17 @@ enum BackgroundImageCache {
 
     static func image(version: Int) -> UIImage? {
         if let c = cached, c.version == version { return c.image }
-        guard let img = UIImage(contentsOfFile: SharedStore.backgroundImageURL.path) else { return nil }
+        // Verkleinert und vorab dekodiert laden (schont den Speicher der Tastatur)
+        let url = SharedStore.backgroundImageURL as CFURL
+        guard let src = CGImageSourceCreateWithURL(url, nil) else { return nil }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: 1100,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+        let img = UIImage(cgImage: cg)
         cached = (version, img)
         return img
     }

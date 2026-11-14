@@ -9,13 +9,37 @@ final class TextEngine {
     private var lexicon: [String: String] = [:]   // Textersetzungen aus iOS + Kontakte
     private var lexiconWords = Set<String>()
     private var dirty = 0
-    private let language: String
+    private var language: String
+    private var loaded = false
+
+    private var englishLanguage: String?
+    private var warmedUp = false
 
     init() {
+        language = "de_DE"
+        // Gelernte Wörter im Hintergrund laden – die Tastatur erscheint sofort.
+        let store = self.store
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let words = store.loadLearnedWords()
+            let grams = Self.loadBigrams()
+            DispatchQueue.main.async {
+                guard let self else { return }
+                // bereits in dieser Sitzung Gelerntes behalten
+                for (k, v) in words { self.learned[k, default: 0] += v }
+                for (k, v) in grams { self.bigrams[k] = (self.bigrams[k] ?? [:]).merging(v, uniquingKeysWith: +) }
+                self.loaded = true
+            }
+        }
+    }
+
+    /// Lädt das Systemwörterbuch einmalig vor (erste Abfrage ist sonst spürbar langsam).
+    func warmUp() {
+        guard !warmedUp else { return }
+        warmedUp = true
         let langs = UITextChecker.availableLanguages
         language = langs.first { $0.hasPrefix("de") } ?? "de_DE"
-        learned = store.loadLearnedWords()
-        bigrams = Self.loadBigrams()
+        englishLanguage = langs.first { $0.hasPrefix("en") }
+        _ = checker.rangeOfMisspelledWord(in: "hallo", range: NSRange(location: 0, length: 5), startingAt: 0, wrap: false, language: language)
     }
 
     func setLexicon(_ lex: UILexicon) {
@@ -61,7 +85,7 @@ final class TextEngine {
             if result.count >= limit + 1 { break }
         }
         // 4. Systemwörterbuch
-        if result.count < limit + 1 {
+        if result.count < limit + 1, warmedUp {
             let ns = prefix as NSString
             let comps = checker.completions(forPartialWordRange: NSRange(location: 0, length: ns.length), in: prefix, language: language) ?? []
             for w in comps.sorted(by: { $0.count < $1.count }).prefix(6) { add(w) }
@@ -108,7 +132,8 @@ final class TextEngine {
         let miss = checker.rangeOfMisspelledWord(in: word, range: range, startingAt: 0, wrap: false, language: language)
         guard miss.location != NSNotFound else { return nil }
         // Auch im Englischen korrekt? Dann nicht korrigieren.
-        if let en = UITextChecker.availableLanguages.first(where: { $0.hasPrefix("en") }) {
+        if !warmedUp { warmUp() }
+        if let en = englishLanguage {
             let missEN = checker.rangeOfMisspelledWord(in: word, range: range, startingAt: 0, wrap: false, language: en)
             if missEN.location == NSNotFound { return nil }
         }
@@ -149,7 +174,7 @@ final class TextEngine {
     }
 
     func save() {
-        guard dirty > 0 else { return }
+        guard dirty > 0, loaded else { return }
         dirty = 0
         if learned.count > 5000 {
             learned = Dictionary(uniqueKeysWithValues: learned.sorted { $0.value > $1.value }.prefix(4000).map { ($0.key, $0.value) })

@@ -234,7 +234,7 @@ enum TextDiff {
 
     static func segments(original: String, revised: String) -> [Segment]? {
         let a = tokenize(original), b = tokenize(revised)
-        guard a.count * b.count < 2_500_000, !b.isEmpty else { return nil }
+        guard a.count * b.count < 600_000, !b.isEmpty else { return nil }
         let n = a.count, m = b.count
         var dp = [[Int32]](repeating: [Int32](repeating: 0, count: m + 1), count: n + 1)
         if n > 0 && m > 0 {

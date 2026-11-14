@@ -29,7 +29,7 @@ final class KeyboardState: ObservableObject {
     weak var controller: KeyboardViewController?
     let store = SharedStore.shared
     let engine = TextEngine()
-    private lazy var client = OpenAIClient(store: store)
+    private let client = OpenAIClient(store: SharedStore.shared)
 
     // Layout
     @Published var layer: KeyboardLayer = .letters
@@ -52,6 +52,8 @@ final class KeyboardState: ObservableObject {
     @Published var aiResult = ""
     @Published var aiOriginal = ""
     @Published var aiShowDiff = false
+    @Published var aiDiff: [TextDiff.Segment]?
+    @Published var aiChangeCount = 0
     @Published var aiError: String?
     @Published var aiTitle = ""
     @Published var composeMode = false
@@ -105,13 +107,34 @@ final class KeyboardState: ObservableObject {
         sourceMode = store.aiScope
         hasFullAccess = controller?.hasFullAccess ?? false
         needsGlobe = controller?.needsInputModeSwitchKey ?? true
-        controller?.requestSupplementaryLexicon { [weak self] lex in self?.engine.setLexicon(lex) }
         onHeightChange?(totalHeight)
-        impact.prepare()
         updateReturnKey()
         updateAutoShift()
-        refreshSuggestionsNow()
-        startClipboardWatch()
+        // Alles Schwere erst nach dem ersten Frame – die Tastatur erscheint sofort.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self else { return }
+            self.impact.prepare()
+            if !self.lexiconRequested {
+                self.lexiconRequested = true
+                self.controller?.requestSupplementaryLexicon { [weak self] lex in
+                    DispatchQueue.main.async { self?.engine.setLexicon(lex) }
+                }
+            }
+            self.engine.warmUp()
+            self.refreshSuggestionsNow()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            self?.startClipboardWatch()
+        }
+    }
+
+    private var lexiconRequested = false
+
+    func handleMemoryWarning() {
+        predictionCache.removeAll()
+        predictionOrder.removeAll()
+        aiDiff = nil
+        if panel == .emoji { panel = .none }
     }
 
     func disappear() {
@@ -710,6 +733,7 @@ final class KeyboardState: ObservableObject {
         aiBusy = true
         aiStatus = "Bereite vor …"
         aiShowDiff = showDiff
+        aiDiff = nil
         composeMode = false
         panel = .result
         store.incrementStat("aiActions")
@@ -747,6 +771,7 @@ final class KeyboardState: ObservableObject {
         aiBusy = true
         aiStatus = "KI schreibt …"
         aiShowDiff = showDiff
+        aiDiff = nil
         replaceTarget = target
         composeMode = false
         panel = .result
@@ -770,10 +795,27 @@ final class KeyboardState: ObservableObject {
             aiResult = result
             aiBusy = false
             feedback(.medium)
+            computeDiff()
         } catch {
             guard !Task.isCancelled else { return }
             aiError = error.localizedDescription
             aiBusy = false
+        }
+    }
+
+    /// Berechnet die markierten Änderungen einmalig im Hintergrund.
+    private func computeDiff() {
+        aiDiff = nil
+        aiChangeCount = 0
+        guard aiShowDiff, !aiOriginal.isEmpty, !aiResult.isEmpty else { return }
+        let original = aiOriginal, revised = aiResult
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let segs = TextDiff.segments(original: original, revised: revised)
+            DispatchQueue.main.async {
+                guard let self, self.aiResult == revised else { return }
+                self.aiDiff = segs
+                self.aiChangeCount = segs?.filter(\.changed).count ?? 0
+            }
         }
     }
 

@@ -75,7 +75,7 @@ struct Toolbar: View {
                         .foregroundStyle(state.tint)
                         .symbolEffect(.pulse, options: .repeating, isActive: state.aiThinking)
                         .frame(width: 38, height: 38)
-                        .glass(cornerRadius: 19, interactive: true)
+                        .glass(cornerRadius: 19, interactive: true, force: true)
                 }
                 .buttonStyle(.plain)
                 suggestionBar
@@ -168,7 +168,7 @@ struct Toolbar: View {
         }
         .animation(.easeOut(duration: 0.18), value: state.aiPhrase?.text)
         .frame(height: 38)
-        .glassCapsule()
+        .glassCapsule(force: true)
     }
 
     private func suggestionButton(_ s: Suggestion) -> some View {
@@ -210,7 +210,7 @@ struct Toolbar: View {
             .font(.subheadline)
             .padding(.horizontal, 12)
             .frame(height: 38)
-            .glassCapsule(tint: state.tint.opacity(0.35))
+            .glassCapsule(tint: state.tint.opacity(0.35), force: true)
             circleButton("arrow.up", active: true) { state.sendCompose() }
         }
     }
@@ -221,7 +221,7 @@ struct Toolbar: View {
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(active ? Color.primary : state.tint)
                 .frame(width: 38, height: 38)
-                .glass(cornerRadius: 19, tint: active ? state.tint.opacity(0.35) : nil, interactive: true)
+                .glass(cornerRadius: 19, tint: active ? state.tint.opacity(0.35) : nil, interactive: true, force: true)
         }
         .buttonStyle(.plain)
     }

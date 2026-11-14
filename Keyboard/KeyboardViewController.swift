@@ -2,13 +2,15 @@ import UIKit
 import SwiftUI
 
 final class KeyboardViewController: UIInputViewController {
-    private var state: KeyboardState!
+    private var state: KeyboardState?
     private var host: UIHostingController<KeyboardRootView>!
     private var heightConstraint: NSLayoutConstraint?
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        state = KeyboardState(controller: self)
+        GlassConfig.lightweight = true
+        let state = KeyboardState(controller: self)
+        self.state = state
         let root = KeyboardRootView(state: state)
         host = UIHostingController(rootView: root)
         host.view.backgroundColor = .clear
@@ -27,6 +29,13 @@ final class KeyboardViewController: UIInputViewController {
         setHeight(state.totalHeight)
     }
 
+    override func didReceiveMemoryWarning() {
+        super.didReceiveMemoryWarning()
+        // Speicher freigeben, damit iOS die Tastatur nicht beendet
+        URLCache.shared.removeAllCachedResponses()
+        state?.handleMemoryWarning()
+    }
+
     private func setHeight(_ h: CGFloat) {
         if let c = heightConstraint {
             c.constant = h
@@ -40,22 +49,22 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        state.appear()
+        state?.appear()
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        state.disappear()
+        state?.disappear()
     }
 
     override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
-        state.textDidChange()
+        state?.textDidChange()
     }
 
     override func selectionDidChange(_ textInput: UITextInput?) {
         super.selectionDidChange(textInput)
-        state.textDidChange()
+        state?.textDidChange()
     }
 
     /// Öffnet eine URL aus der Tastatur heraus (z. B. die App für Einstellungen).

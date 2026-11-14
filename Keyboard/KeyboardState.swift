@@ -138,6 +138,7 @@ final class KeyboardState: ObservableObject {
         case ai, refine, translate, calc, mcCommand, apiKey, baseURL, chatModel, personalContext, writingStyle
         case macroShortcut, macroText, profileName, profileContext(UUID), actionTitle, actionPrompt
         case aiBehavior, learnedProfile, actionEdit(UUID), discordAnnounce
+        case clipEdit(UUID), clipNew, clipRename(UUID), clipFolderNew, clipFolderRename(String), clipSearch
 
         var placeholder: String {
             switch self {
@@ -161,6 +162,12 @@ final class KeyboardState: ObservableObject {
             case .learnedProfile: return "Was die KI über dich weiß …"
             case .actionEdit: return "Neue Anweisung für die Aktion"
             case .discordAnnounce: return "Worum geht die Ankündigung?"
+            case .clipEdit: return "Eintrag bearbeiten …"
+            case .clipNew: return "Neuer Eintrag – tippe den Text …"
+            case .clipRename: return "Name für den Eintrag"
+            case .clipFolderNew: return "Name des neuen Ordners"
+            case .clipFolderRename: return "Neuer Ordnername"
+            case .clipSearch: return "In der Ablage suchen …"
             }
         }
 
@@ -181,10 +188,29 @@ final class KeyboardState: ObservableObject {
             case .aiBehavior: return "slider.horizontal.below.square.and.square.filled"
             case .learnedProfile: return "brain.head.profile"
             case .discordAnnounce: return "megaphone"
+            case .clipEdit, .clipNew, .clipRename: return "doc.on.clipboard"
+            case .clipFolderNew, .clipFolderRename: return "folder"
+            case .clipSearch: return "magnifyingglass"
             }
         }
 
-        var isSetting: Bool { self != .ai && self != .refine && self != .translate && self != .calc && self != .mcCommand && self != .discordAnnounce }
+        var isSetting: Bool { self != .ai && self != .refine && self != .translate && self != .calc && self != .mcCommand && self != .discordAnnounce && !isClip }
+
+        /// Eingaben, die zur Zwischenablage gehören.
+        var isClip: Bool {
+            switch self {
+            case .clipEdit, .clipNew, .clipRename, .clipFolderNew, .clipFolderRename, .clipSearch: return true
+            default: return false
+            }
+        }
+
+        /// Lange Texte: großer Editor, Return = neue Zeile, Speichern über ✓.
+        var isLongText: Bool {
+            switch self {
+            case .clipEdit, .clipNew, .aiBehavior, .learnedProfile, .actionPrompt, .actionEdit, .personalContext, .writingStyle, .profileContext, .macroText: return true
+            default: return false
+            }
+        }
     }
 
     enum SettingsPage: Equatable { case main, ai, context, design, typing, macros, actions, toolbar }
@@ -221,8 +247,15 @@ final class KeyboardState: ObservableObject {
     var toolbarHeight: CGFloat {
         let compact = isLandscape && !isPad
         if composeMode && composeTarget == .translate { return compact ? 82 : 96 }
+        if composeMode && composeTarget.isLongText { return compact ? 96 : 150 }
         return compact ? 42 : 48
     }
+    /// Zusätzliche Höhe für die große Ablage-Ansicht (nur Hochformat).
+    var panelExtraHeight: CGFloat {
+        guard panel == .clipboard, store.clipboardExpanded, !isLandscape else { return 0 }
+        return isPad ? 220 : 190
+    }
+    var contentHeight: CGFloat { keysHeight + panelExtraHeight }
     var keyRowHeight: CGFloat {
         if isPad { return isLandscape ? 60 : 64 }
         return isLandscape ? 39 : 55
@@ -231,7 +264,7 @@ final class KeyboardState: ObservableObject {
     @Published var sideInset: CGFloat = 0
     var rowCount: Int { store.showNumberRow && layer == .letters ? 5 : 4 }
     var keysHeight: CGFloat { CGFloat(rowCount) * keyRowHeight + 8 }
-    var totalHeight: CGFloat { toolbarHeight + keysHeight }
+    var totalHeight: CGFloat { toolbarHeight + keysHeight + panelExtraHeight }
 
     enum ReplaceTarget { case none, selection, all(length: Int), range(before: Int, after: Int) }
 
@@ -308,7 +341,11 @@ final class KeyboardState: ObservableObject {
         case .emergencyCall: title = "Notruf"
         default: title = "⏎"
         }
-        if composeMode { if returnTitle != "Senden" { returnTitle = "Senden" }; return }
+        if composeMode {
+            let t = composeTarget.isLongText ? "⏎" : "Senden"
+            if returnTitle != t { returnTitle = t }
+            return
+        }
         if title != returnTitle { returnTitle = title }
     }
 
@@ -495,7 +532,10 @@ final class KeyboardState: ObservableObject {
     }
 
     func tapReturn() {
-        if composeMode { sendCompose(); return }
+        if composeMode {
+            if composeTarget.isLongText { composeText += "\n"; return }
+            sendCompose(); return
+        }
         commitWord(trailing: "\n")
     }
 
@@ -1202,6 +1242,7 @@ final class KeyboardState: ObservableObject {
         updateReturnKey()
         if target == .refine, !aiResult.isEmpty { panel = .result }
         if target.isSetting { panel = .settings }
+        if target.isClip { panel = .clipboard; reloadClips() }
         translateTask?.cancel()
         translatePreview = ""
         showLanguagePicker = false
@@ -1220,8 +1261,12 @@ final class KeyboardState: ObservableObject {
         composeTarget = .ai
         composeText = ""
         updateReturnKey()
+        if target.isClip {
+            saveClipInput(target, target.isLongText ? raw : text)
+            return
+        }
         if target.isSetting {
-            saveSettingInput(target, text)
+            saveSettingInput(target, target.isLongText ? raw.trimmingCharacters(in: .whitespacesAndNewlines) : text)
             return
         }
         guard !text.isEmpty else { cancelCompose(); return }
@@ -1458,18 +1503,146 @@ final class KeyboardState: ObservableObject {
     }
 
     func togglePin(_ item: ClipItem) {
-        var items = store.loadClips()
-        if let i = items.firstIndex(where: { $0.id == item.id }) { items[i].pinned.toggle() }
-        items.sort { a, b in a.pinned != b.pinned ? a.pinned : a.date > b.date }
-        store.saveClips(items)
-        clips = items
+        clips = store.updateClips { items in
+            if let i = items.firstIndex(where: { $0.id == item.id }) { items[i].pinned.toggle() }
+        }
+        feedback()
     }
 
     func deleteClip(_ item: ClipItem) {
-        var items = store.loadClips()
-        items.removeAll { $0.id == item.id }
-        store.saveClips(items)
-        clips = items
+        clips = store.updateClips { $0.removeAll { $0.id == item.id } }
+        feedback(.medium)
+        showToast("Eintrag gelöscht")
+    }
+
+    // MARK: - Ablage: Ordner, Bearbeiten, Suche
+
+    /// "" = Alle, "★" = Angeheftet, "⏱" = nur Verlauf, sonst Ordnername
+    @Published var clipFilter = ""
+    @Published var clipQuery = ""
+
+    var visibleClips: [ClipItem] {
+        var list = clips
+        switch clipFilter {
+        case "": break
+        case "★": list = list.filter(\.pinned)
+        case "⏱": list = list.filter { $0.folder == nil }
+        default: list = list.filter { $0.folder == clipFilter }
+        }
+        let q = clipQuery.trimmingCharacters(in: .whitespaces).lowercased()
+        if !q.isEmpty {
+            list = list.filter { $0.text.lowercased().contains(q) || ($0.title?.lowercased().contains(q) ?? false) }
+        }
+        return list
+    }
+
+    func copyClip(_ item: ClipItem) {
+        guard hasFullAccess else { return }
+        UIPasteboard.general.string = item.text
+        lastChangeCount = UIPasteboard.general.changeCount
+        clips = store.updateClips { items in
+            if let i = items.firstIndex(where: { $0.id == item.id }) { items[i].date = Date() }
+        }
+        feedback()
+        showToast("Kopiert ✓")
+    }
+
+    func moveClip(_ item: ClipItem, to folder: String?) {
+        clips = store.updateClips { items in
+            if let i = items.firstIndex(where: { $0.id == item.id }) { items[i].folder = folder }
+        }
+        feedback()
+        showToast(folder.map { "In „\($0)“ verschoben ✓" } ?? "Aus dem Ordner genommen")
+    }
+
+    func toggleClipExpanded() {
+        store.clipboardExpanded.toggle()
+        feedback()
+        onHeightChange?(totalHeight)
+    }
+
+    func setClipFilter(_ f: String) {
+        clipFilter = f
+        feedback()
+    }
+
+    func deleteFolder(_ name: String, keepItems: Bool) {
+        store.clipFolders.removeAll { $0 == name }
+        clips = store.updateClips { items in
+            if keepItems {
+                for i in items.indices where items[i].folder == name { items[i].folder = nil; items[i].pinned = true }
+            } else {
+                items.removeAll { $0.folder == name }
+            }
+        }
+        if clipFilter == name { clipFilter = "" }
+        feedback(.medium)
+        showToast(keepItems ? "Ordner gelöscht – Einträge angeheftet" : "Ordner samt Inhalt gelöscht")
+    }
+
+    /// Löscht den Verlauf (Angeheftetes und Ordner bleiben).
+    func clearHistory() {
+        clips = store.updateClips { $0.removeAll { !$0.pinned && $0.folder == nil } }
+        feedback(.medium)
+        showToast("Verlauf geleert")
+    }
+
+    /// Text im Feld (oder Markierung) als neuen Eintrag speichern.
+    func saveFieldAsClip() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let t = self.selected.isEmpty ? await self.readFullText() : self.selected
+            guard !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { self.showToast("Kein Text im Feld."); return }
+            self.addClipEntry(t)
+            self.showToast("Als Eintrag gespeichert ✓")
+        }
+    }
+
+    private func addClipEntry(_ text: String) {
+        let folder = (clipFilter.isEmpty || clipFilter == "★" || clipFilter == "⏱") ? nil : clipFilter
+        let pinned = clipFilter == "★"
+        clips = store.updateClips { items in
+            items.insert(ClipItem(text: text, pinned: pinned, folder: folder), at: 0)
+        }
+    }
+
+    private func saveClipInput(_ target: ComposeTarget, _ text: String) {
+        panel = .clipboard
+        onHeightChange?(totalHeight)
+        switch target {
+        case .clipEdit(let id):
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { showToast("Leerer Text – nichts geändert."); return }
+            clips = store.updateClips { items in
+                if let i = items.firstIndex(where: { $0.id == id }) { items[i].text = text }
+            }
+            showToast("Eintrag gespeichert ✓")
+        case .clipNew:
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            addClipEntry(text)
+            showToast("Eintrag angelegt ✓")
+        case .clipRename(let id):
+            clips = store.updateClips { items in
+                if let i = items.firstIndex(where: { $0.id == id }) { items[i].title = text.isEmpty ? nil : text }
+            }
+            showToast(text.isEmpty ? "Name entfernt" : "Umbenannt ✓")
+        case .clipFolderNew:
+            guard !text.isEmpty, !["★", "⏱"].contains(text) else { return }
+            if !store.clipFolders.contains(text) { store.clipFolders.append(text) }
+            clipFilter = text
+            showToast("Ordner „\(text)“ angelegt ✓")
+        case .clipFolderRename(let old):
+            guard !text.isEmpty, text != old, !store.clipFolders.contains(text) else { return }
+            if let i = store.clipFolders.firstIndex(of: old) { store.clipFolders[i] = text }
+            clips = store.updateClips { items in
+                for i in items.indices where items[i].folder == old { items[i].folder = text }
+            }
+            if clipFilter == old { clipFilter = text }
+            showToast("Ordner umbenannt ✓")
+        case .clipSearch:
+            clipQuery = text
+        default: break
+        }
+        reloadClips()
     }
 
     /// KI-Aktion direkt auf einen Ablage-Eintrag.
@@ -1479,6 +1652,16 @@ final class KeyboardState: ObservableObject {
         let prompt = AIAction.defaults.first(where: { $0.category == .summary })?.prompt ?? "Fasse den Text zusammen."
         runAI(title: "Ablage zusammenfassen", original: text, target: .none, showDiff: false) { [client = self.client] partial in
             try await client.transform(text: text, instruction: prompt, onPartial: partial)
+        }
+    }
+
+    func translateClipItem(_ item: ClipItem) {
+        guard requireAI() else { return }
+        let text = item.text, target = store.translateTarget
+        runAI(title: "Übersetzung → \(Languages.flag(target)) \(target)", original: text, target: .none, showDiff: false) { [client = self.client] partial in
+            let r = try await client.translate(text, to: target)
+            partial(r)
+            return r
         }
     }
 

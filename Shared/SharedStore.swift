@@ -83,6 +83,9 @@ final class SharedStore: ObservableObject {
 
     @Published var clipboardEnabled: Bool = true { didSet { set(clipboardEnabled, "clipboardEnabled") } }
     @Published var clipboardLimit: Int = 50 { didSet { set(clipboardLimit, "clipboardLimit") } }
+    @Published var clipFolders: [String] = [] { didSet { setCodable(clipFolders, "clipFolders") } }
+    /// Ablage in großer Ansicht (höhere Tastatur).
+    @Published var clipboardExpanded: Bool = true { didSet { set(clipboardExpanded, "clipboardExpanded") } }
 
     @Published var haptics: Bool = true { didSet { set(haptics, "haptics") } }
     /// Haptik-Stärke 0…1 und Art („light“ = wie iOS, „soft“, „medium“, „rigid“, „heavy“).
@@ -161,6 +164,8 @@ final class SharedStore: ObservableObject {
         upd(\.macroAutoExpand, bool("macroAutoExpand", true))
         upd(\.clipboardEnabled, bool("clipboardEnabled", true))
         upd(\.clipboardLimit, d.object(forKey: "clipboardLimit") as? Int ?? 50)
+        upd(\.clipFolders, getCodable("clipFolders") ?? [])
+        upd(\.clipboardExpanded, bool("clipboardExpanded", true))
         upd(\.haptics, bool("haptics", true))
         upd(\.hapticStrength, d.object(forKey: "hapticStrength") as? Double ?? 0.6)
         upd(\.hapticStyle, d.string(forKey: "hapticStyle") ?? "light")
@@ -359,12 +364,26 @@ final class SharedStore: ObservableObject {
         } else {
             items.insert(ClipItem(text: text), at: 0)
         }
-        let pinned = items.filter { $0.pinned }
-        let unpinned = items.filter { !$0.pinned }.prefix(max(5, clipboardLimit))
-        items = (pinned + unpinned).sorted { a, b in
+        let kept = items.filter { $0.pinned || $0.folder != nil }
+        let history = items.filter { !$0.pinned && $0.folder == nil }.prefix(max(5, clipboardLimit))
+        items = Self.sortClips(kept + history)
+        saveClips(items)
+        return items
+    }
+
+    static func sortClips(_ items: [ClipItem]) -> [ClipItem] {
+        items.sorted { a, b in
             if a.pinned != b.pinned { return a.pinned }
             return a.date > b.date
         }
+    }
+
+    /// Ändert den Verlauf atomar (laden → ändern → sortieren → speichern).
+    @discardableResult
+    func updateClips(_ change: (inout [ClipItem]) -> Void) -> [ClipItem] {
+        var items = loadClips()
+        change(&items)
+        items = Self.sortClips(items)
         saveClips(items)
         return items
     }

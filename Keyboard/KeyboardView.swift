@@ -11,7 +11,7 @@ struct KeyboardRootView: View {
                 .frame(height: state.toolbarHeight)
                 .zIndex(0)
             content
-                .frame(height: state.keysHeight)
+                .frame(height: state.contentHeight)
                 .zIndex(1)
         }
         .padding(.horizontal, state.sideInset)
@@ -301,6 +301,8 @@ struct Toolbar: View {
     private var composeBar: some View {
         if state.composeTarget == .translate {
             translateBar
+        } else if state.composeTarget.isLongText {
+            longTextEditor
         } else {
             HStack(spacing: 6) {
                 circleButton("xmark", active: true) { state.cancelCompose() }
@@ -333,6 +335,50 @@ struct Toolbar: View {
                 circleButton(state.composeTarget.isSetting || state.composeTarget == .calc ? "checkmark" : "arrow.up", active: true) { state.sendCompose() }
             }
         }
+    }
+
+    /// Großer Editor für lange Texte (Ablage, KI-Regeln, Profile …): Return = neue Zeile, ✓ = speichern.
+    private var longTextEditor: some View {
+        VStack(spacing: 5) {
+            HStack(spacing: 6) {
+                circleButton("xmark", active: true) { state.cancelCompose() }
+                Label(state.composeTarget.placeholder, systemImage: state.composeTarget.symbol)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Text("\(state.composeText.count)").font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                smallButton("doc.on.clipboard") { state.pasteIntoCompose() }
+                smallButton("trash") { state.composeText = ""; state.feedback() }
+                circleButton("checkmark", active: true) { state.sendCompose() }
+            }
+            ScrollViewReader { reader in
+                ScrollView {
+                    (Text(state.composeText.isEmpty ? " " : state.composeText)
+                        .foregroundColor(state.composeText.isEmpty ? .secondary : .primary)
+                     + Text("▏").foregroundColor(state.tint))
+                        .font(.system(size: 15))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                    Color.clear.frame(height: 1).id("end")
+                }
+                .onChange(of: state.composeText) { _, _ in reader.scrollTo("end", anchor: .bottom) }
+                .onAppear { reader.scrollTo("end", anchor: .bottom) }
+            }
+            .frame(maxHeight: .infinity)
+            .glass(cornerRadius: 14, tint: state.tint.opacity(0.2), force: true)
+        }
+    }
+
+    private func smallButton(_ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .semibold))
+                .frame(width: 32, height: 32)
+                .glass(cornerRadius: 16, interactive: true, force: true)
+        }
+        .buttonStyle(.plain)
     }
 
     /// Zweizeilige Übersetzungsleiste: oben deine Eingabe, unten die Live-Übersetzung.

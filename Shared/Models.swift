@@ -17,6 +17,10 @@ struct ClipItem: Codable, Identifiable, Hashable {
     var text: String
     var date = Date()
     var pinned = false
+    /// Ordner (nil = nur Verlauf). Einträge in Ordnern werden nie automatisch gelöscht.
+    var folder: String? = nil
+    /// Optionaler Name statt Textanfang.
+    var title: String? = nil
 }
 
 /// Ein Kontext-Profil (z. B. „Arbeit“, „Privat“), das jeder KI-Anfrage mitgegeben wird.

@@ -371,6 +371,10 @@ struct ResultPanel: View {
 
 struct ClipboardPanel: View {
     @ObservedObject var state: KeyboardState
+    @ObservedObject var store = SharedStore.shared
+    @State private var confirmDeleteID: UUID?
+    @State private var confirmFolder: String?
+    @State private var confirmClear = false
 
     var body: some View {
         Group {
@@ -379,57 +383,248 @@ struct ClipboardPanel: View {
                     MissingSetupBanner(state: state).padding(10)
                     Spacer()
                 }
-            } else if state.clips.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "doc.on.clipboard").font(.largeTitle).foregroundStyle(.secondary)
-                    Text("Noch nichts kopiert").font(.subheadline).foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 6) {
-                        ForEach(state.clips) { item in
-                            HStack(alignment: .center, spacing: 10) {
-                                Button { state.pasteClip(item) } label: {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(String(item.text.prefix(240)))
-                                            .font(.system(size: 14))
-                                            .lineLimit(2)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                        HStack(spacing: 4) {
-                                            Text(item.date, style: .relative)
-                                            Text("· \(item.text.wordCount) Wörter")
-                                        }
-                                        .font(.system(size: 10))
-                                        .foregroundStyle(.secondary)
-                                    }
-                                    .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                if item.text.wordCount > 40 {
-                                    Button { state.summarizeClip(item) } label: {
-                                        Image(systemName: "text.append").foregroundStyle(state.tint)
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                                Button { state.togglePin(item) } label: {
-                                    Image(systemName: item.pinned ? "pin.fill" : "pin")
-                                        .foregroundStyle(item.pinned ? Color.yellow : Color.secondary)
-                                }
-                                .buttonStyle(.plain)
-                                Button { state.deleteClip(item) } label: {
-                                    Image(systemName: "xmark").foregroundStyle(.secondary)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                            .padding(10)
-                            .glass(cornerRadius: 12)
-                        }
-                    }
-                    .padding(8)
+                VStack(spacing: 6) {
+                    folderBar
+                    actionBar
+                    if let folder = confirmFolder { folderConfirm(folder) }
+                    if confirmClear { clearConfirm }
+                    list
                 }
+                .padding(.horizontal, 8)
+                .padding(.top, 4)
             }
         }
+    }
+
+    // MARK: Ordner
+
+    private var folderBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                filterChip("Alle", "tray.full", "", count: state.clips.count)
+                filterChip("Angeheftet", "pin.fill", "★", count: state.clips.filter(\.pinned).count)
+                filterChip("Verlauf", "clock", "⏱", count: state.clips.filter { $0.folder == nil }.count)
+                ForEach(store.clipFolders, id: \.self) { f in
+                    filterChip(f, "folder.fill", f, count: state.clips.filter { $0.folder == f }.count)
+                        .contextMenu {
+                            Button { state.beginInput(.clipFolderRename(f), prefill: f) } label: { Label("Umbenennen", systemImage: "pencil") }
+                            Button(role: .destructive) { confirmFolder = f } label: { Label("Ordner löschen …", systemImage: "trash") }
+                        }
+                }
+                Button { state.beginInput(.clipFolderNew) } label: {
+                    Label("Ordner", systemImage: "folder.badge.plus")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10)
+                        .frame(height: 30)
+                        .glassCapsule(tint: state.tint.opacity(0.25), interactive: true)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 2)
+        }
+    }
+
+    private func filterChip(_ title: String, _ symbol: String, _ key: String, count: Int) -> some View {
+        let selected = state.clipFilter == key
+        return Button { state.setClipFilter(key) } label: {
+            HStack(spacing: 4) {
+                Image(systemName: symbol).font(.system(size: 11, weight: .semibold))
+                Text(title).lineLimit(1)
+                Text("\(count)").font(.system(size: 10, weight: .bold).monospacedDigit()).opacity(0.7)
+            }
+            .font(.caption.weight(.semibold))
+            .padding(.horizontal, 10)
+            .frame(height: 30)
+            .foregroundStyle(selected ? Color.white : Color.primary)
+            .glassCapsule(tint: selected ? state.tint : nil, interactive: true)
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: Aktionen
+
+    private var actionBar: some View {
+        HStack(spacing: 6) {
+            barButton("Neu", "plus") { state.beginInput(.clipNew) }
+            barButton("Feld sichern", "square.and.arrow.down") { state.saveFieldAsClip() }
+            if state.clipQuery.isEmpty {
+                barButton("Suchen", "magnifyingglass") { state.beginInput(.clipSearch) }
+            } else {
+                Button { state.clipQuery = ""; state.feedback() } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "magnifyingglass")
+                        Text("„\(state.clipQuery)“").lineLimit(1)
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .frame(height: 32)
+                    .glassCapsule(tint: state.tint, interactive: true)
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer(minLength: 0)
+            Button { confirmClear = true; state.feedback() } label: {
+                Image(systemName: "trash.slash").font(.system(size: 13, weight: .semibold))
+                    .frame(width: 32, height: 32).glass(cornerRadius: 16, interactive: true)
+            }
+            .buttonStyle(.plain)
+            Button { state.toggleClipExpanded() } label: {
+                Image(systemName: store.clipboardExpanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 32, height: 32).glass(cornerRadius: 16, interactive: true)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func barButton(_ title: String, _ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: symbol)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .padding(.horizontal, 10)
+                .frame(height: 32)
+                .glassCapsule(interactive: true)
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: Bestätigungen
+
+    private func folderConfirm(_ f: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Ordner „\(f)“ löschen?").font(.footnote.weight(.semibold))
+            HStack(spacing: 6) {
+                confirmButton("Abbrechen", nil) { confirmFolder = nil }
+                confirmButton("Inhalt behalten", .orange) { state.deleteFolder(f, keepItems: true); confirmFolder = nil }
+                confirmButton("Alles löschen", .red) { state.deleteFolder(f, keepItems: false); confirmFolder = nil }
+            }
+        }
+        .padding(9)
+        .glass(cornerRadius: 12, tint: .red.opacity(0.25))
+    }
+
+    private var clearConfirm: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Verlauf leeren? Angeheftetes und Ordner bleiben erhalten.").font(.footnote.weight(.semibold))
+            HStack(spacing: 6) {
+                confirmButton("Abbrechen", nil) { confirmClear = false }
+                confirmButton("Verlauf leeren", .red) { state.clearHistory(); confirmClear = false }
+            }
+        }
+        .padding(9)
+        .glass(cornerRadius: 12, tint: .red.opacity(0.25))
+    }
+
+    private func confirmButton(_ title: String, _ color: Color?, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(color == nil ? Color.primary : Color.white)
+                .frame(maxWidth: .infinity, minHeight: 32)
+                .glass(cornerRadius: 10, tint: color, interactive: true)
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: Liste
+
+    @ViewBuilder
+    private var list: some View {
+        let items = state.visibleClips
+        if items.isEmpty {
+            VStack(spacing: 8) {
+                Image(systemName: state.clipQuery.isEmpty ? "doc.on.clipboard" : "magnifyingglass").font(.title).foregroundStyle(.secondary)
+                Text(state.clipQuery.isEmpty ? (state.clipFilter.isEmpty ? "Noch nichts kopiert" : "Hier ist noch nichts") : "Nichts gefunden")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                if !state.clipQuery.isEmpty || !state.clipFilter.isEmpty {
+                    Text("Mit „Neu“ legst du Einträge an, über ⋯ verschiebst du sie in Ordner.")
+                        .font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 6) {
+                    ForEach(items) { item in
+                        if confirmDeleteID == item.id {
+                            HStack(spacing: 6) {
+                                Text("Wirklich löschen?").font(.footnote.weight(.semibold))
+                                Spacer(minLength: 0)
+                                confirmButton("Abbrechen", nil) { confirmDeleteID = nil }.frame(width: 100)
+                                confirmButton("Löschen", .red) { state.deleteClip(item); confirmDeleteID = nil }.frame(width: 90)
+                            }
+                            .padding(10)
+                            .glass(cornerRadius: 12, tint: .red.opacity(0.25))
+                        } else {
+                            row(item)
+                        }
+                    }
+                }
+                .padding(.bottom, 8)
+            }
+        }
+    }
+
+    private func row(_ item: ClipItem) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            Button { state.pasteClip(item) } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    if let title = item.title, !title.isEmpty {
+                        Text(title).font(.system(size: 14, weight: .bold)).lineLimit(1)
+                    }
+                    Text(String(item.text.prefix(400)))
+                        .font(.system(size: 14))
+                        .lineLimit(store.clipboardExpanded ? 4 : 2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(spacing: 4) {
+                        if let f = item.folder { Label(f, systemImage: "folder.fill").labelStyle(.titleAndIcon) }
+                        Text(item.date, style: .relative)
+                        Text("· \(item.text.wordCount) Wörter")
+                    }
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Button { state.togglePin(item) } label: {
+                Image(systemName: item.pinned ? "pin.fill" : "pin")
+                    .foregroundStyle(item.pinned ? Color.yellow : Color.secondary)
+                    .frame(width: 26, height: 30)
+            }
+            .buttonStyle(.plain)
+            Menu {
+                Button { state.pasteClip(item) } label: { Label("Einfügen", systemImage: "text.insert") }
+                Button { state.copyClip(item) } label: { Label("Kopieren", systemImage: "doc.on.doc") }
+                Button { state.beginInput(.clipEdit(item.id), prefill: item.text) } label: { Label("Bearbeiten", systemImage: "pencil") }
+                Button { state.beginInput(.clipRename(item.id), prefill: item.title ?? "") } label: { Label("Umbenennen", systemImage: "character.cursor.ibeam") }
+                Menu {
+                    Button { state.moveClip(item, to: nil) } label: { Label("Kein Ordner", systemImage: item.folder == nil ? "checkmark" : "tray") }
+                    ForEach(store.clipFolders, id: \.self) { f in
+                        Button { state.moveClip(item, to: f) } label: { Label(f, systemImage: item.folder == f ? "checkmark" : "folder") }
+                    }
+                    Button { state.beginInput(.clipFolderNew) } label: { Label("Neuer Ordner …", systemImage: "folder.badge.plus") }
+                } label: { Label("In Ordner", systemImage: "folder") }
+                Button { state.summarizeClip(item) } label: { Label("Zusammenfassen", systemImage: "text.append") }
+                Button { state.translateClipItem(item) } label: { Label("Übersetzen (\(store.translateTarget))", systemImage: "character.bubble") }
+                Button(role: .destructive) { confirmDeleteID = item.id } label: { Label("Löschen …", systemImage: "trash") }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 17))
+                    .foregroundStyle(state.tint)
+                    .frame(width: 30, height: 30)
+            }
+            Button { confirmDeleteID = item.id; state.feedback() } label: {
+                Image(systemName: "trash").foregroundStyle(.secondary).frame(width: 26, height: 30)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(10)
+        .glass(cornerRadius: 12)
     }
 }
 

@@ -1178,6 +1178,7 @@ struct KeyboardSettingsPanel: View {
 
     private var typingPage: some View {
         VStack(alignment: .leading, spacing: 10) {
+            TypingMetricsView(tint: state.tint)
             typingToggles
             clipAndPasswordSettings
             Text("Power-Tippen: „Lernende Zonen“ passt die Tasten an deine Finger an, „Tipp-Korrektur“ repariert Vertipper beim Leerzeichen über die echten Tipp-Positionen.")

@@ -203,7 +203,7 @@ final class KeyCapView: UIView {
             cap.layer.removeAnimation(forKey: "backgroundColor")
             apply()
         } else {
-            UIView.animate(withDuration: 0.14, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState, .curveEaseOut], animations: apply)
+            UIView.animate(withDuration: 0.09, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState, .curveEaseOut], animations: apply)
         }
     }
 
@@ -597,6 +597,7 @@ final class KeysView: UIView {
 
     override func touchesBegan(_ set: Set<UITouch>, with event: UIEvent?) {
         for t in set {
+            TypingMetrics.shared.touchArrived(t)
             let p = t.location(in: self)
             // Schnelles Tippen: vorherige Tasten zuerst auslösen (Rollover), damit die Reihenfolge stimmt
             for id in touchOrder {
@@ -781,6 +782,16 @@ final class KeysView: UIView {
     }
 
     private func commit(_ info: TouchInfo) {
+        let label: String
+        switch info.key.kind {
+        case .space: label = "Leerzeichen"
+        case .char: label = "Buchstabe"
+        default: label = "Sondertaste"
+        }
+        TypingMetrics.shared.measure(label) { commitNow(info) }
+    }
+
+    private func commitNow(_ info: TouchInfo) {
         guard !info.handled, let state else { return }
         info.handled = true
         state.noteKeystroke()

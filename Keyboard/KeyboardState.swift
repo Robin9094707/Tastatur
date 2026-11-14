@@ -344,6 +344,10 @@ final class KeyboardState: ObservableObject {
     }
 
     func textDidChange() {
+        TypingMetrics.shared.measure("Textänderung") { textDidChangeWork() }
+    }
+
+    private func textDidChangeWork() {
         if !wordTaps.isEmpty, wordTaps.count != currentWord.count { wordTaps = [] }
         updateReturnKey()
         updateLoginField()
@@ -651,7 +655,8 @@ final class KeyboardState: ObservableObject {
                 deleteChars(word.count)
                 proxy?.insertText(corr + trailing)
                 undoCorrection = (word, corr, trailing)
-                store.incrementStat("corrections")
+                let st = store
+                DispatchQueue.global(qos: .utility).async { st.incrementStat("corrections") }
                 engine.learn(word: corr, previous: prev)
                 afterCommit()
                 return
@@ -903,6 +908,11 @@ final class KeyboardState: ObservableObject {
     }
 
     func refreshSuggestionsNow() {
+        TypingMetrics.shared.measure("Vorschläge") { refreshSuggestionsWork() }
+        TypingMetrics.shared.lastWork = "Leiste zeichnen"
+    }
+
+    private func refreshSuggestionsWork() {
         aiSuggestionTask?.cancel()
         aiThinking = false
         if composeMode || (panel != .none && panel != .tools) { return }
@@ -2857,7 +2867,8 @@ final class KeyboardState: ObservableObject {
     private func saveTouchModel() {
         var raw: [String: [Double]] = [:]
         for (k, v) in touchModel { raw[String(k)] = [Double(v.x), Double(v.y)] }
-        store.defaults.set(raw, forKey: "touchModel")
+        let d = store.defaults
+        DispatchQueue.global(qos: .utility).async { d.set(raw, forKey: "touchModel") }
     }
 
     func resetTouchModel() {

@@ -255,7 +255,7 @@ struct Toolbar: View {
             } else if bar.suggestions.count <= 3 && bar.phrases.isEmpty {
                 // Klassische iOS-Leiste: drei gleich breite Felder
                 HStack(spacing: 0) {
-                    ForEach(Array(bar.suggestions.enumerated()), id: \.element.id) { index, s in
+                    ForEach(Array(bar.suggestions.enumerated()), id: \.offset) { index, s in
                         if index > 0 {
                             Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 1, height: 18)
                         }

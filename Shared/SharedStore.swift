@@ -33,7 +33,7 @@ final class SharedStore: ObservableObject {
 
     static let defaultChatModel = "gpt-6-luna"
     static let fallbackModels = ["gpt-6-luna", "gpt-5.6-luna", "gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"]
-    static let settingsVersion = 2
+    static let settingsVersion = 3
 
     @Published var apiKey: String = "" { didSet { set(apiKey, "apiKey") } }
     @Published var baseURL: String = "https://api.openai.com/v1" { didSet { set(baseURL, "baseURL") } }
@@ -64,10 +64,24 @@ final class SharedStore: ObservableObject {
     @Published var autocorrect: Bool = true { didSet { set(autocorrect, "autocorrect") } }
     @Published var autocapitalize: Bool = true { didSet { set(autocapitalize, "autocapitalize") } }
     @Published var doubleSpacePeriod: Bool = true { didSet { set(doubleSpacePeriod, "doubleSpacePeriod") } }
-    @Published var aiSuggestions: Bool = false { didSet { set(aiSuggestions, "aiSuggestions") } }
+    @Published var aiSuggestions: Bool = true { didSet { set(aiSuggestions, "aiSuggestions") } }
     @Published var learnWords: Bool = true { didSet { set(learnWords, "learnWords") } }
     @Published var showNumberRow: Bool = false { didSet { set(showNumberRow, "showNumberRow") } }
     @Published var keyboardTint: Int = 0 { didSet { set(keyboardTint, "keyboardTint") } }
+
+    // Aussehen
+    @Published var backgroundStyle: String = "system" { didSet { set(backgroundStyle, "backgroundStyle") } }
+    @Published var backgroundPreset: Int = 0 { didSet { set(backgroundPreset, "backgroundPreset") } }
+    @Published var backgroundColorHex: String = "#3A2E8C" { didSet { set(backgroundColorHex, "backgroundColorHex") } }
+    @Published var backgroundDim: Double = 0.25 { didSet { set(backgroundDim, "backgroundDim") } }
+    @Published var keyOpacity: Double = 1.0 { didSet { set(keyOpacity, "keyOpacity") } }
+    @Published var keyCornerRadius: Double = 8.5 { didSet { set(keyCornerRadius, "keyCornerRadius") } }
+    @Published var keyFontScale: Double = 1.0 { didSet { set(keyFontScale, "keyFontScale") } }
+    @Published var backgroundVersion: Int = 0 { didSet { set(backgroundVersion, "backgroundVersion") } }
+
+    // Emojis
+    @Published var emojiRecents: [String] = [] { didSet { setCodable(emojiRecents, "emojiRecents") } }
+    @Published var emojiFavorites: [String] = ["❤️", "😂", "👍", "🙏", "🔥", "✨"] { didSet { setCodable(emojiFavorites, "emojiFavorites") } }
 
     private var loading = false
 
@@ -101,10 +115,49 @@ final class SharedStore: ObservableObject {
         autocorrect = bool("autocorrect", true)
         autocapitalize = bool("autocapitalize", true)
         doubleSpacePeriod = bool("doubleSpacePeriod", true)
-        aiSuggestions = bool("aiSuggestions", false)
+        aiSuggestions = bool("aiSuggestions", true)
         learnWords = bool("learnWords", true)
         showNumberRow = bool("showNumberRow", false)
         keyboardTint = d.object(forKey: "keyboardTint") as? Int ?? 0
+        backgroundStyle = d.string(forKey: "backgroundStyle") ?? "system"
+        backgroundPreset = d.object(forKey: "backgroundPreset") as? Int ?? 0
+        backgroundColorHex = d.string(forKey: "backgroundColorHex") ?? "#3A2E8C"
+        backgroundDim = d.object(forKey: "backgroundDim") as? Double ?? 0.25
+        keyOpacity = d.object(forKey: "keyOpacity") as? Double ?? 1.0
+        keyCornerRadius = d.object(forKey: "keyCornerRadius") as? Double ?? 8.5
+        keyFontScale = d.object(forKey: "keyFontScale") as? Double ?? 1.0
+        backgroundVersion = d.object(forKey: "backgroundVersion") as? Int ?? 0
+        emojiRecents = getCodable("emojiRecents") ?? []
+        emojiFavorites = getCodable("emojiFavorites") ?? ["❤️", "😂", "👍", "🙏", "🔥", "✨"]
+    }
+
+    // MARK: - Hintergrundbild
+
+    static var backgroundImageURL: URL { containerURL.appendingPathComponent("keyboard-background.jpg") }
+
+    func saveBackgroundImage(_ data: Data) {
+        try? data.write(to: Self.backgroundImageURL, options: .atomic)
+        backgroundVersion += 1
+        backgroundStyle = "image"
+    }
+
+    // MARK: - Emojis
+
+    func useEmoji(_ e: String) {
+        var r = emojiRecents
+        r.removeAll { $0 == e }
+        r.insert(e, at: 0)
+        emojiRecents = Array(r.prefix(40))
+    }
+
+    @discardableResult
+    func toggleFavorite(_ e: String) -> Bool {
+        if emojiFavorites.contains(e) {
+            emojiFavorites.removeAll { $0 == e }
+            return false
+        }
+        emojiFavorites.insert(e, at: 0)
+        return true
     }
 
     /// Aktualisiert alte Einstellungen (neue Standardmodelle, neue KI-Aktionen).
@@ -121,6 +174,7 @@ final class SharedStore: ObservableObject {
             if let newData = try? JSONEncoder().encode(AIAction.defaults + custom) { d.set(newData, forKey: "actions") }
         }
         if let scope = d.string(forKey: "aiScope"), AIScope(rawValue: scope) == nil { d.removeObject(forKey: "aiScope") }
+        if version < 3 { d.set(true, forKey: "aiSuggestions") }
         for key in ["transcribeModel", "dictationLanguage", "dictationCleanup", "dictationVocabulary", "dictationSessionMinutes"] {
             d.removeObject(forKey: key)
         }

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct KeyboardRootView: View {
     @ObservedObject var state: KeyboardState
+    @ObservedObject var store = SharedStore.shared
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
@@ -13,7 +14,8 @@ struct KeyboardRootView: View {
                 .frame(height: state.keysHeight)
                 .zIndex(1)
         }
-        .background(background)
+        .background(KeyboardBackgroundView(store: store, scheme: scheme))
+        .environment(\.colorScheme, forcedScheme ?? scheme)
         .overlay(alignment: .top) {
             if let toast = state.toast {
                 Text(toast)
@@ -52,13 +54,8 @@ struct KeyboardRootView: View {
         }
     }
 
-    private var background: some View {
-        ZStack {
-            LinearGradient(colors: [state.tint.opacity(scheme == .dark ? 0.20 : 0.10), Color.clear], startPoint: .top, endPoint: .bottom)
-            LinearGradient(colors: [Color.clear, state.tint.opacity(scheme == .dark ? 0.10 : 0.05)], startPoint: .topLeading, endPoint: .bottomTrailing)
-        }
-        .ignoresSafeArea()
-        .allowsHitTesting(false)
+    private var forcedScheme: ColorScheme? {
+        Theme.backgroundIsDark(store).map { $0 ? .dark : .light }
     }
 }
 
@@ -72,7 +69,15 @@ struct Toolbar: View {
             if state.composeMode {
                 composeBar
             } else if state.panel == .none {
-                circleButton("sparkles", active: false) { state.toggle(.tools) }
+                Button { state.toggle(.tools) } label: {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(state.tint)
+                        .symbolEffect(.pulse, options: .repeating, isActive: state.aiThinking)
+                        .frame(width: 38, height: 38)
+                        .glass(cornerRadius: 19, interactive: true)
+                }
+                .buttonStyle(.plain)
                 suggestionBar
                 circleButton("wand.and.stars", active: false) { state.toggle(.ai) }
             } else if state.panel == .tools {
@@ -123,12 +128,14 @@ struct Toolbar: View {
 
     private var suggestionBar: some View {
         HStack(spacing: 0) {
-            if state.suggestions.isEmpty {
+            if state.suggestions.isEmpty && state.aiPhrase == nil {
                 Spacer()
                 if let profile = state.store.activeProfile {
                     Text("\(profile.emoji) \(profile.name)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                } else if state.aiThinking {
+                    Text("KI denkt mit …").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
             } else {
@@ -136,30 +143,54 @@ struct Toolbar: View {
                     if index > 0 {
                         Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 1, height: 18)
                     }
-                    Button { state.pickSuggestion(s) } label: {
-                        HStack(spacing: 3) {
-                            if s.kind == .ai { Image(systemName: "sparkle").font(.system(size: 9)) }
-                            Text(s.display ?? s.text)
-                                .font(.system(size: 16, weight: s.kind == .correction ? .semibold : .regular))
+                    suggestionButton(s)
+                }
+                if let phrase = state.aiPhrase {
+                    Button { state.pickSuggestion(phrase) } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "sparkles").font(.system(size: 10, weight: .bold))
+                            Text(phrase.display ?? phrase.text)
+                                .font(.system(size: 14, weight: .medium))
                                 .lineLimit(1)
-                                .minimumScaleFactor(0.6)
+                                .truncationMode(.tail)
                         }
-                        .padding(.horizontal, 6)
+                        .foregroundStyle(Color.primary)
+                        .padding(.horizontal, 10)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .foregroundStyle(s.kind == .typed ? Color.secondary : Color.primary)
-                        .background {
-                            if s.kind == .correction || s.kind == .macro {
-                                Capsule().fill(state.tint.opacity(0.28)).padding(3)
-                            }
-                        }
+                        .background(Capsule().fill(state.tint.opacity(0.30)).padding(3))
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .layoutPriority(1)
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
                 }
             }
         }
+        .animation(.easeOut(duration: 0.18), value: state.aiPhrase?.text)
         .frame(height: 38)
         .glassCapsule()
+    }
+
+    private func suggestionButton(_ s: Suggestion) -> some View {
+        Button { state.pickSuggestion(s) } label: {
+            HStack(spacing: 3) {
+                if s.kind == .ai { Image(systemName: "sparkle").font(.system(size: 9)).foregroundStyle(state.tint) }
+                Text(s.display ?? s.text)
+                    .font(.system(size: 16, weight: s.kind == .correction ? .semibold : .regular))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+            }
+            .padding(.horizontal, 6)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .foregroundStyle(s.kind == .typed ? Color.secondary : Color.primary)
+            .background {
+                if s.kind == .correction || s.kind == .macro {
+                    Capsule().fill(state.tint.opacity(0.28)).padding(3)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private var composeBar: some View {

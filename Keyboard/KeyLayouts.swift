@@ -49,16 +49,3 @@ enum KeyLayouts {
         "%": ["‰"],
     ]
 }
-
-enum EmojiData {
-    static let categories: [(name: String, symbol: String, emojis: [String])] = [
-        ("Smileys", "face.smiling", "😀 😃 😄 😁 😆 😅 😂 🤣 🥲 😊 😇 🙂 🙃 😉 😌 😍 🥰 😘 😗 😙 😚 😋 😛 😝 😜 🤪 🤨 🧐 🤓 😎 🥸 🤩 🥳 😏 😒 😞 😔 😟 😕 🙁 😣 😖 😫 😩 🥺 😢 😭 😤 😠 😡 🤬 🤯 😳 🥵 🥶 😱 😨 😰 😥 😓 🤗 🤔 🫡 🤭 🫢 🤫 🤥 😶 😐 😑 😬 🫠 🙄 😯 😦 😧 😮 😲 🥱 😴 🤤 😪 😵 🤐 🥴 🤢 🤮 🤧 😷 🤒 🤕 🤑 🤠 😈 👿 👹 💩 👻 💀 👽 🤖 🎃".components(separatedBy: " ")),
-        ("Gesten", "hand.raised", "👍 👎 👌 🤌 🤏 ✌️ 🤞 🫰 🤟 🤘 🤙 👈 👉 👆 👇 ☝️ ✋ 🤚 🖐️ 🖖 👋 🤝 🙏 👏 🙌 🫶 👐 🤲 💪 🦾 ✍️ 💅 🤳 👀 👁️ 🧠 🫀 👄 💋 🫦 👶 🧒 👦 👧 🧑 👱 👨 👩 🧓 👴 👵 🙋 🙅 🙆 🤷 🤦 💁 🙇 🧑‍💻 👨‍💻 👩‍💻 🕺 💃 👯".components(separatedBy: " ")),
-        ("Herzen", "heart", "❤️ 🧡 💛 💚 💙 💜 🖤 🤍 🤎 🩷 🩵 🩶 💔 ❤️‍🔥 ❤️‍🩹 ❣️ 💕 💞 💓 💗 💖 💘 💝 💟 ♥️ 💯 💢 💥 💫 💦 💨 🕳️ 💬 💭 💤 ✨ ⭐️ 🌟 🔥 🎉 🎊 🎈 🎁 🏆 🥇".components(separatedBy: " ")),
-        ("Natur", "leaf", "🐶 🐱 🐭 🐹 🐰 🦊 🐻 🐼 🐨 🐯 🦁 🐮 🐷 🐸 🐵 🙈 🙉 🙊 🐔 🐧 🐦 🦆 🦅 🦉 🐺 🐴 🦄 🐝 🦋 🐌 🐞 🐢 🐍 🐙 🐬 🐳 🦈 🌵 🌲 🌳 🌴 🌱 🌿 🍀 🍁 🍂 🌷 🌹 🌺 🌸 🌼 🌻 🌞 🌝 🌚 🌙 🌍 🪐 ⚡️ 🌈 ☀️ ⛅️ 🌧️ ⛈️ ❄️ ☃️ 🌊".components(separatedBy: " ")),
-        ("Essen", "fork.knife", "🍏 🍎 🍐 🍊 🍋 🍌 🍉 🍇 🍓 🫐 🍒 🍑 🥭 🍍 🥥 🥝 🍅 🥑 🥦 🥕 🌽 🥔 🥐 🥨 🧀 🥚 🍳 🥓 🥩 🍗 🍔 🍟 🍕 🌭 🥪 🌮 🌯 🥗 🍝 🍜 🍣 🍱 🍦 🍰 🎂 🍫 🍿 🍩 🍪 ☕️ 🍵 🧃 🥤 🍺 🍻 🥂 🍷 🍸 🍹 🍾".components(separatedBy: " ")),
-        ("Aktivität", "figure.run", "⚽️ 🏀 🏈 ⚾️ 🎾 🏐 🏓 🏸 🥊 🚴 🏃 🧘 🏋️ 🏊 🎮 🕹️ 🎲 🎯 🎳 🎸 🎹 🎤 🎧 🎬 🎨 📚 ✈️ 🚗 🚕 🚌 🚆 🚲 🛵 🚀 🛸 🏠 🏡 🏢 🏖️ 🏔️ 🗽 🗼 🎡 🎢 ⛺️".components(separatedBy: " ")),
-        ("Objekte", "lightbulb", "📱 💻 ⌨️ 🖥️ 🖨️ 📷 📸 📹 🎥 📞 ☎️ 📺 📻 ⏰ ⌛️ 💡 🔦 🕯️ 💸 💵 💶 💳 💎 🔧 🔨 🛠️ ⚙️ 🧲 💊 💉 🩺 🧸 🎀 📦 📫 ✉️ 📧 📝 📎 📌 📍 ✂️ 🔒 🔑 🗝️ 🛒 🧾 📅 📆 🗓️ 📈 📉 📊 ✅ ❌ ❓ ❗️ ⚠️ 🚫 ♻️ 🆗 🆕 🔝 ➡️ ⬅️ ⬆️ ⬇️ 🔁".components(separatedBy: " ")),
-        ("Flaggen", "flag", "🇩🇪 🇦🇹 🇨🇭 🇪🇺 🇺🇸 🇬🇧 🇫🇷 🇪🇸 🇮🇹 🇳🇱 🇵🇱 🇹🇷 🇬🇷 🇵🇹 🇸🇪 🇳🇴 🇩🇰 🇫🇮 🇨🇿 🇭🇺 🇭🇷 🇺🇦 🇷🇺 🇯🇵 🇨🇳 🇰🇷 🇮🇳 🇧🇷 🇨🇦 🇦🇺 🏳️‍🌈 🏴‍☠️ 🏁".components(separatedBy: " ")),
-    ]
-}

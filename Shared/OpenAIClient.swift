@@ -194,9 +194,38 @@ final class OpenAIClient {
             .map { String($0) }
     }
 
+    struct Prediction {
+        var rest: String
+        var phrase: String
+        var words: [String]
+    }
+
+    /// KI-Autovervollständigung: Rest des aktuellen Wortes, nächste Wörter und eine Satzfortsetzung.
+    func predict(context: String) async throws -> Prediction {
+        let raw = try await chat(messages: [
+            ChatMessage(role: "system", content: """
+            Du bist die Autovervollständigung einer Smartphone-Tastatur. Sage voraus, wie der Nutzer weiterschreibt – natürlich, in seiner Sprache und seinem Ton.
+            Antworte NUR mit kompaktem JSON: {"rest":"…","words":["…","…","…"],"phrase":"…"}
+            - "rest": Falls das letzte Wort unvollständig ist, die fehlenden Buchstaben (ohne Leerzeichen), sonst "".
+            - "words": 3 verschiedene wahrscheinliche nächste Einzelwörter (bzw. Vervollständigungen des angefangenen Wortes als ganzes Wort).
+            - "phrase": die wahrscheinlichste Fortsetzung mit 2–7 Wörtern NACH dem aktuellen Wort (ohne führendes Leerzeichen), oder "".
+            """ + (store.writingStyle.isEmpty ? "" : "\nSchreibstil des Nutzers: \(store.writingStyle)")),
+            ChatMessage(role: "user", content: String(context.suffix(600))),
+        ], model: store.fastModel, stream: false, effort: "minimal")
+        guard let start = raw.firstIndex(of: "{"), let end = raw.lastIndex(of: "}"),
+              let data = String(raw[start...end]).data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return Prediction(rest: "", phrase: "", words: [])
+        }
+        let rest = (json["rest"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let phrase = (json["phrase"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let words = (json["words"] as? [String] ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty && !$0.contains(" ") }
+        return Prediction(rest: rest, phrase: phrase, words: Array(words.prefix(3)))
+    }
+
     // MARK: - Chat mit Fallbacks
 
-    func chat(messages: [ChatMessage], model: String? = nil, stream: Bool? = nil, onPartial: ((String) -> Void)? = nil) async throws -> String {
+    func chat(messages: [ChatMessage], model: String? = nil, stream: Bool? = nil, effort: String? = nil, onPartial: ((String) -> Void)? = nil) async throws -> String {
         guard !key.isEmpty else { throw OpenAIError.missingKey }
         let preferred = (model ?? store.chatModel).trimmingCharacters(in: .whitespaces)
         Self.lock.lock()
@@ -210,7 +239,7 @@ final class OpenAIClient {
         var lastError: Error = OpenAIError.invalidResponse
         for candidate in candidates {
             do {
-                let result = try await chatWithParameterRetry(messages: messages, model: candidate, stream: wantStream, onPartial: onPartial)
+                let result = try await chatWithParameterRetry(messages: messages, model: candidate, stream: wantStream, effort: effort ?? store.reasoningEffort, onPartial: onPartial)
                 if candidate != preferred {
                     Self.lock.lock(); Self.workingModel[preferred] = candidate; Self.lock.unlock()
                 }
@@ -224,18 +253,19 @@ final class OpenAIClient {
         throw lastError
     }
 
-    private func chatWithParameterRetry(messages: [ChatMessage], model: String, stream: Bool, onPartial: ((String) -> Void)?) async throws -> String {
+    private func chatWithParameterRetry(messages: [ChatMessage], model: String, stream: Bool, effort wanted: String, onPartial: ((String) -> Void)?) async throws -> String {
+        let effortKey = model + "|" + wanted
         Self.lock.lock()
-        let useEffort = !Self.noEffort.contains(model)
+        let useEffort = !Self.noEffort.contains(effortKey)
         let useStream = stream && !Self.noStream.contains(model)
         Self.lock.unlock()
-        let effort = useEffort ? store.reasoningEffort : nil
+        let effort = useEffort ? wanted : nil
         do {
             return try await request(messages: messages, model: model, effort: effort, stream: useStream, onPartial: onPartial)
         } catch let error as OpenAIError where error.isParameterError {
             Self.lock.lock()
             if case .http(_, let msg) = error {
-                if msg.lowercased().contains("stream") { Self.noStream.insert(model) } else { Self.noEffort.insert(model) }
+                if msg.lowercased().contains("stream") { Self.noStream.insert(model) } else { Self.noEffort.insert(effortKey) }
             }
             Self.lock.unlock()
             // Zweiter Versuch: ohne optionale Parameter

@@ -15,6 +15,10 @@ struct KeysConfig: Equatable {
     var numberRow: Bool
     var tintIndex: Int
     var popups: Bool
+    var keyOpacity: CGFloat = 1
+    var cornerRadius: CGFloat = 8.5
+    var fontScale: CGFloat = 1
+    var forceDark: Bool? = nil
 }
 
 // MARK: - Einzelne Taste
@@ -62,7 +66,7 @@ final class KeyCapView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         cap.frame = bounds.insetBy(dx: 3, dy: 5.5)
-        cap.layer.shadowPath = UIBezierPath(roundedRect: cap.bounds, cornerRadius: 8.5).cgPath
+        cap.layer.shadowPath = UIBezierPath(roundedRect: cap.bounds, cornerRadius: cap.layer.cornerRadius).cgPath
         label.frame = cap.bounds.insetBy(dx: 2, dy: 0)
         icon.frame = cap.bounds
     }
@@ -72,11 +76,16 @@ final class KeyCapView: UIView {
         label.isHidden = false
         icon.isHidden = true
         label.textColor = .label
-        let sym = UIImage.SymbolConfiguration(pointSize: 18, weight: .regular)
+        let sym = UIImage.SymbolConfiguration(pointSize: 18 * config.fontScale, weight: .regular)
+        let fs = config.fontScale
+        if cap.layer.cornerRadius != config.cornerRadius {
+            cap.layer.cornerRadius = config.cornerRadius
+            setNeedsLayout()
+        }
         switch kind {
         case .char(let c):
             label.text = upper ? c.uppercased() : c
-            label.font = .systemFont(ofSize: c.count > 1 ? 17 : 24, weight: .regular)
+            label.font = .systemFont(ofSize: (c.count > 1 ? 17 : 24) * fs, weight: .regular)
         case .shift:
             showIcon(config.shift == .caps ? "capslock.fill" : (config.shift == .on ? "shift.fill" : "shift"), sym)
             icon.tintColor = config.shift != .off ? .black : .label
@@ -121,7 +130,8 @@ final class KeyCapView: UIView {
     func applyColors(config: KeysConfig, dark: Bool) {
         lastConfig = config
         lastDark = dark
-        cap.layer.shadowOpacity = dark ? 0.45 : 0.25
+        cap.layer.shadowOpacity = Float((dark ? 0.45 : 0.25) * config.keyOpacity)
+        cap.alpha = 1
         if case .returnKey = kind, config.returnTitle != "⏎" {
             cap.backgroundColor = tint.withAlphaComponent(isPressed ? 0.6 : 0.95)
             return
@@ -130,14 +140,15 @@ final class KeyCapView: UIView {
             cap.backgroundColor = UIColor.white.withAlphaComponent(isPressed ? 0.7 : 0.95)
             return
         }
+        let k = config.keyOpacity
         if dark {
-            let base: CGFloat = isSpecial ? 0.13 : 0.30
+            let base: CGFloat = (isSpecial ? 0.13 : 0.30) * k
             cap.backgroundColor = UIColor(white: 1, alpha: isPressed ? base + 0.25 : base)
         } else {
             if isSpecial {
-                cap.backgroundColor = UIColor(white: isPressed ? 0.98 : 0.68, alpha: 0.85)
+                cap.backgroundColor = UIColor(white: isPressed ? 0.98 : 0.68, alpha: 0.85 * k)
             } else {
-                cap.backgroundColor = UIColor(white: isPressed ? 0.72 : 1.0, alpha: 0.95)
+                cap.backgroundColor = UIColor(white: isPressed ? 0.72 : 1.0, alpha: isPressed ? 0.95 : 0.95 * k)
             }
         }
     }
@@ -307,6 +318,8 @@ final class KeysView: UIView {
         let changed = c != config || rowHeight != self.rowHeight
         self.rowHeight = rowHeight
         config = c
+        let style: UIUserInterfaceStyle = c.forceDark.map { $0 ? .dark : .light } ?? .unspecified
+        if overrideUserInterfaceStyle != style { overrideUserInterfaceStyle = style; popup.overrideUserInterfaceStyle = style }
         guard changed else { return }
         if structural { rebuild() } else { refreshKeys() }
         setNeedsLayout()
@@ -601,7 +614,9 @@ struct KeysRepresentable: UIViewRepresentable {
         v.state = state
         v.apply(KeysConfig(layer: state.layer, shift: state.shift, returnTitle: state.returnTitle,
                            needsGlobe: state.needsGlobe, numberRow: store.showNumberRow,
-                           tintIndex: store.keyboardTint, popups: store.keyPopups),
+                           tintIndex: store.keyboardTint, popups: store.keyPopups,
+                           keyOpacity: CGFloat(store.keyOpacity), cornerRadius: CGFloat(store.keyCornerRadius),
+                           fontScale: CGFloat(store.keyFontScale), forceDark: Theme.backgroundIsDark(store)),
                 rowHeight: state.keyRowHeight)
     }
 }

@@ -394,32 +394,94 @@ struct MacroPanel: View {
 
 struct EmojiPanel: View {
     @ObservedObject var state: KeyboardState
-    @State private var category = 0
+    @ObservedObject var store = SharedStore.shared
+    @State private var selected = "fav"
+
+    private struct Item: Identifiable {
+        let id: String
+        let emoji: String
+    }
+
+    private struct Section {
+        let key: String
+        let name: String
+        let symbol: String
+        let emojis: [String]
+    }
+
+    private var sections: [Section] {
+        var list: [Section] = []
+        list.append(Section(key: "fav", name: "Favoriten", symbol: "star.fill", emojis: store.emojiFavorites))
+        if !store.emojiRecents.isEmpty {
+            list.append(Section(key: "recent", name: "Zuletzt", symbol: "clock", emojis: store.emojiRecents))
+        }
+        for (i, c) in EmojiCatalog.categories.enumerated() {
+            list.append(Section(key: "c\(i)", name: c.name, symbol: c.symbol, emojis: c.emojis))
+        }
+        return list
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 0), count: 8), spacing: 2) {
-                    ForEach(Array(EmojiData.categories[category].emojis.enumerated()), id: \.offset) { _, e in
-                        Button { state.feedback(); state.insert(e) } label: {
-                            Text(e).font(.system(size: 28)).frame(height: 40).frame(maxWidth: .infinity)
+        let secs = sections
+        VStack(spacing: 4) {
+            ScrollViewReader { reader in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: 14) {
+                        ForEach(secs, id: \.key) { sec in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(sec.name.uppercased())
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.leading, 6)
+                                if sec.emojis.isEmpty {
+                                    Text("Halte ein Emoji gedrückt,\num es zu favorisieren ⭐️")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 180, alignment: .leading)
+                                        .padding(.leading, 6)
+                                        .padding(.top, 8)
+                                } else {
+                                    LazyHGrid(rows: Array(repeating: GridItem(.fixed(40), spacing: 0), count: 4), spacing: 0) {
+                                        ForEach(Array(sec.emojis.enumerated()), id: \.offset) { _, e in
+                                            EmojiCell(emoji: e, isFavorite: store.emojiFavorites.contains(e)) {
+                                                state.insertEmoji(e)
+                                            } onLong: {
+                                                state.toggleFavoriteEmoji(e)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            .id(sec.key)
                         }
-                        .buttonStyle(.plain)
                     }
+                    .padding(.horizontal, 6)
                 }
-                .padding(.horizontal, 4)
+                .onChange(of: selected) { _, key in
+                    withAnimation(.snappy) { reader.scrollTo(key, anchor: .leading) }
+                }
             }
-            HStack(spacing: 2) {
+            .frame(maxHeight: .infinity)
+
+            HStack(spacing: 0) {
                 Button { state.toggle(.emoji) } label: {
-                    Text("ABC").font(.system(size: 14, weight: .semibold)).frame(width: 46, height: 34)
+                    Text("ABC").font(.system(size: 14, weight: .semibold)).frame(width: 44, height: 34)
                 }
                 .buttonStyle(.plain)
-                ForEach(Array(EmojiData.categories.enumerated()), id: \.offset) { i, cat in
-                    Button { category = i } label: {
-                        Image(systemName: cat.symbol)
-                            .font(.system(size: 15))
-                            .frame(maxWidth: .infinity, minHeight: 34)
-                            .foregroundStyle(category == i ? state.tint : Color.secondary)
+                ForEach(secs, id: \.key) { sec in
+                    Button {
+                        state.feedback()
+                        selected = sec.key
+                    } label: {
+                        Image(systemName: sec.symbol)
+                            .font(.system(size: 14, weight: selected == sec.key ? .bold : .regular))
+                            .frame(maxWidth: .infinity, minHeight: 30)
+                            .foregroundStyle(selected == sec.key ? state.tint : Color.secondary)
+                            .background {
+                                if selected == sec.key {
+                                    Circle().fill(state.tint.opacity(0.18)).frame(width: 30, height: 30)
+                                }
+                            }
                     }
                     .buttonStyle(.plain)
                 }
@@ -428,11 +490,37 @@ struct EmojiPanel: View {
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 4)
             .glassCapsule()
             .padding(.horizontal, 6)
             .padding(.bottom, 4)
         }
+        .padding(.top, 4)
+    }
+}
+
+private struct EmojiCell: View {
+    let emoji: String
+    let isFavorite: Bool
+    let onTap: () -> Void
+    let onLong: () -> Void
+    @State private var pressed = false
+
+    var body: some View {
+        Text(emoji)
+            .font(.system(size: 29))
+            .frame(width: 42, height: 40)
+            .scaleEffect(pressed ? 1.3 : 1)
+            .animation(.spring(response: 0.2, dampingFraction: 0.6), value: pressed)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                pressed = true
+                onTap()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { pressed = false }
+            }
+            .onLongPressGesture(minimumDuration: 0.45) {
+                onLong()
+            }
     }
 }
 

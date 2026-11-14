@@ -17,11 +17,12 @@ enum Panel: Equatable {
 }
 
 struct Suggestion: Identifiable, Equatable {
-    enum Kind { case word, typed, correction, macro, ai }
+    enum Kind { case word, typed, correction, macro, ai, phrase }
     let id = UUID()
     var text: String
     var kind: Kind
     var display: String? = nil
+    var rest: String = ""
 }
 
 final class KeyboardState: ObservableObject {
@@ -35,6 +36,10 @@ final class KeyboardState: ObservableObject {
     @Published var shift: ShiftState = .on
     @Published var panel: Panel = .none
     @Published var suggestions: [Suggestion] = []
+    @Published var aiPhrase: Suggestion?
+    @Published var aiThinking = false
+    private var predictionCache: [String: OpenAIClient.Prediction] = [:]
+    private var predictionOrder: [String] = []
     @Published var hasFullAccess = false
     @Published var needsGlobe = true
     @Published var returnTitle = "⏎"
@@ -449,21 +454,70 @@ final class KeyboardState: ObservableObject {
             suggestions = newList
         }
 
-        if store.aiSuggestions, hasFullAccess, store.hasAPIKey, before.count > 8 {
-            let context = before
-            aiSuggestionTask = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 700_000_000)
-                guard !Task.isCancelled, let self else { return }
-                guard let result = try? await self.client.suggestions(context: context), !Task.isCancelled else { return }
-                await MainActor.run {
-                    guard self.before == context else { return }
-                    var merged = self.suggestions.filter { $0.kind == .typed || $0.kind == .correction || $0.kind == .macro }
-                    for r in result where !merged.contains(where: { $0.text == r }) {
-                        merged.append(Suggestion(text: r, kind: .ai))
-                    }
-                    self.suggestions = Array(merged.prefix(3))
+        requestPrediction()
+    }
+
+    /// KI-Vorhersage für die Vorschlagsleiste (entprellt, mit Cache).
+    private func requestPrediction() {
+        guard store.aiSuggestions, hasFullAccess, store.hasAPIKey, !composeMode else {
+            if aiPhrase != nil { aiPhrase = nil }
+            return
+        }
+        let context = before
+        let trimmed = context.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 3 else {
+            if aiPhrase != nil { aiPhrase = nil }
+            aiThinking = false
+            return
+        }
+        let key = String(context.suffix(300))
+        if let cached = predictionCache[key] {
+            applyPrediction(cached, context: context)
+            return
+        }
+        if aiPhrase != nil { aiPhrase = nil }
+        aiThinking = true
+        aiSuggestionTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 320_000_000)
+            guard !Task.isCancelled, let self else { return }
+            let prediction = try? await self.client.predict(context: context)
+            await MainActor.run {
+                self.aiThinking = false
+                guard !Task.isCancelled, let prediction else { return }
+                self.predictionCache[key] = prediction
+                self.predictionOrder.append(key)
+                if self.predictionOrder.count > 60 {
+                    self.predictionCache[self.predictionOrder.removeFirst()] = nil
                 }
+                guard self.before == context else { return }
+                self.applyPrediction(prediction, context: context)
             }
+        }
+    }
+
+    private func applyPrediction(_ p: OpenAIClient.Prediction, context: String) {
+        let word = currentWord
+        var merged = suggestions.filter { $0.kind == .typed || $0.kind == .correction || $0.kind == .macro }
+        // Vervollständigung des aktuellen Wortes aus "rest"
+        if !word.isEmpty, !p.rest.isEmpty, p.rest.count < 25 {
+            let full = word + p.rest
+            if !merged.contains(where: { $0.text == full }) {
+                merged.insert(Suggestion(text: full, kind: .ai), at: min(1, merged.count))
+            }
+        }
+        for w in p.words where !merged.contains(where: { $0.text.lowercased() == w.lowercased() }) {
+            merged.append(Suggestion(text: w, kind: .ai))
+        }
+        // Lokale Vorschläge auffüllen
+        for s in suggestions where !merged.contains(where: { $0.text == s.text }) { merged.append(s) }
+        let phraseText = p.phrase
+        let limit = phraseText.isEmpty ? 3 : 2
+        suggestions = Array(merged.prefix(limit))
+        if phraseText.isEmpty {
+            aiPhrase = nil
+        } else {
+            let rest = word.isEmpty ? "" : p.rest
+            aiPhrase = Suggestion(text: phraseText, kind: .phrase, display: rest.isEmpty ? phraseText : "…" + rest + " " + phraseText, rest: rest)
         }
     }
 
@@ -479,6 +533,21 @@ final class KeyboardState: ObservableObject {
             engine.learn(word: s.text, previous: previousWord, weight: 2)
             proxy?.insertText(" ")
             undoCorrection = nil
+            afterCommit()
+        case .phrase:
+            // Rest des Wortes + Phrase anhängen
+            let word = currentWord
+            var insertText = s.text
+            if !s.rest.isEmpty {
+                insertText = s.rest + " " + s.text
+            } else if !word.isEmpty {
+                insertText = " " + s.text
+            } else if let last = before.last, !last.isWhitespace {
+                insertText = " " + s.text
+            }
+            proxy?.insertText(insertText + " ")
+            aiPhrase = nil
+            store.incrementStat("aiPhrases")
             afterCommit()
         case .ai:
             let word = currentWord
@@ -897,6 +966,22 @@ final class KeyboardState: ObservableObject {
 
     func openApp(_ path: String = "") {
         if let url = URL(string: "tastatur://\(path)") { controller?.openURL(url) }
+    }
+
+    // MARK: - Emojis
+
+    func insertEmoji(_ e: String) {
+        feedback()
+        if composeMode { composeText += e; return }
+        proxy?.insertText(e)
+        store.useEmoji(e)
+        undoCorrection = nil
+    }
+
+    func toggleFavoriteEmoji(_ e: String) {
+        let added = store.toggleFavorite(e)
+        feedback(.medium)
+        showToast(added ? "\(e) zu Favoriten hinzugefügt ⭐️" : "\(e) aus Favoriten entfernt")
     }
 
     // MARK: - Panels

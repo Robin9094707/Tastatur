@@ -8,6 +8,7 @@ struct SettingsView: View {
     var body: some View {
         List {
             Section("Tippen") {
+                Toggle(isOn: $store.aiSuggestions) { Label("KI-Vorschläge & Satzfortsetzung", systemImage: "sparkles") }
                 Toggle(isOn: $store.autocorrect) { Label("Autokorrektur", systemImage: "textformat.abc.dottedunderline") }
                 Toggle(isOn: $store.autocapitalize) { Label("Automatische Großschreibung", systemImage: "textformat.size.larger") }
                 Toggle(isOn: $store.doubleSpacePeriod) { Label("Punkt durch doppeltes Leerzeichen", systemImage: "circle.fill") }
@@ -24,25 +25,25 @@ struct SettingsView: View {
             .glassRow()
 
             Section("Design") {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 14) {
-                        ForEach(Array(Theme.tints.enumerated()), id: \.offset) { index, tint in
-                            Button {
-                                store.keyboardTint = index
-                            } label: {
-                                VStack(spacing: 6) {
-                                    Circle()
-                                        .fill(tint.color.gradient)
-                                        .frame(width: 44, height: 44)
-                                        .overlay(Circle().strokeBorder(.white, lineWidth: store.keyboardTint == index ? 3 : 0))
-                                    Text(tint.name).font(.caption2)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                        }
+                NavigationLink { AppearanceView() } label: {
+                    HStack {
+                        Label("Hintergrund, Farben & Tasten", systemImage: "paintbrush.pointed")
+                        Spacer()
+                        Circle().fill(Theme.tint(store.keyboardTint).gradient).frame(width: 18, height: 18)
                     }
-                    .padding(.vertical, 6)
                 }
+            }
+            .glassRow()
+
+            Section {
+                HStack {
+                    Label("Favoriten", systemImage: "star")
+                    Spacer()
+                    Text(store.emojiFavorites.prefix(8).joined())
+                }
+                Button("Emoji-Verlauf löschen", role: .destructive) { store.emojiRecents = [] }
+            } header: { Text("Emojis") } footer: {
+                Text("In der Tastatur ein Emoji gedrückt halten, um es zu den Favoriten hinzuzufügen oder zu entfernen.")
             }
             .glassRow()
 

@@ -24,7 +24,7 @@ struct KeyboardRootView: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                     .glassCapsule(tint: state.tint.opacity(0.6))
-                    .padding(.top, 54)
+                    .padding(.top, 4)
                     .transition(.move(edge: .top).combined(with: .opacity))
                     .zIndex(2)
             }
@@ -38,8 +38,8 @@ struct KeyboardRootView: View {
     private var content: some View {
         switch state.panel {
         case .none, .tools:
-            KeysRepresentable(state: state)
-                .transition(.opacity)
+            // Das Tastenfeld liegt als UIKit-Ansicht direkt im Controller darüber (siehe KeyboardViewController)
+            Color.clear.allowsHitTesting(false)
         case .ai:
             AIPanel(state: state).transition(.move(edge: .bottom).combined(with: .opacity))
         case .result:

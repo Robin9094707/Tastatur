@@ -1,11 +1,19 @@
 import UIKit
 import SwiftUI
+import Combine
 
 final class KeyboardViewController: UIInputViewController {
     private var state: KeyboardState?
     private var host: UIHostingController<KeyboardRootView>!
     private var heightConstraint: NSLayoutConstraint?
     private var lastLandscape: Bool?
+    /// Tastenfeld direkt im Controller – wie bei der Apple-Tastatur kein SwiftUI dazwischen.
+    /// So kann keine SwiftUI-Geste Berührungen verzögern, abbrechen oder schlucken.
+    private let keysView = KeysView()
+    private var keysTop: NSLayoutConstraint?
+    private var keysLeading: NSLayoutConstraint?
+    private var keysTrailing: NSLayoutConstraint?
+    private var subscriptions = Set<AnyCancellable>()
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -26,8 +34,52 @@ final class KeyboardViewController: UIInputViewController {
             host.view.topAnchor.constraint(equalTo: view.topAnchor),
             host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
-        state.onHeightChange = { [weak self] h in self?.setHeight(h) }
+        // Tastenfeld über die SwiftUI-Ebene legen (dort ist an dieser Stelle nur der Hintergrund)
+        keysView.translatesAutoresizingMaskIntoConstraints = false
+        keysView.bind(to: state)
+        view.addSubview(keysView)
+        let top = keysView.topAnchor.constraint(equalTo: view.topAnchor, constant: state.toolbarHeight)
+        let lead = keysView.leadingAnchor.constraint(equalTo: view.leadingAnchor)
+        let trail = keysView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        NSLayoutConstraint.activate([top, lead, trail, keysView.bottomAnchor.constraint(equalTo: view.bottomAnchor)])
+        keysTop = top; keysLeading = lead; keysTrailing = trail
+        // Sichtbar nur ohne Panel (bzw. mit Schnellleiste)
+        state.$panel
+            .sink { [weak self] p in self?.updateKeysVisibility(p) }
+            .store(in: &subscriptions)
+        // Leistenhöhe ändert sich z. B. im Eingabe-Modus
+        state.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.syncKeysFrame() }
+            .store(in: &subscriptions)
+        state.onHeightChange = { [weak self] h in
+            self?.setHeight(h)
+            self?.syncKeysFrame()
+        }
         setHeight(state.totalHeight)
+    }
+
+    private func updateKeysVisibility(_ p: Panel) {
+        let show = p == .none || p == .tools
+        guard show == keysView.isHidden else { return }
+        if show {
+            keysView.alpha = 0
+            keysView.isHidden = false
+            UIView.animate(withDuration: 0.18, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState]) { self.keysView.alpha = 1 }
+        } else {
+            UIView.animate(withDuration: 0.12, delay: 0, options: [.beginFromCurrentState], animations: { self.keysView.alpha = 0 }) { done in
+                if done, let s = self.state, !(s.panel == .none || s.panel == .tools) { self.keysView.isHidden = true }
+            }
+        }
+    }
+
+    private func syncKeysFrame() {
+        guard let state else { return }
+        let t = state.toolbarHeight
+        if keysTop?.constant != t { keysTop?.constant = t }
+        let side = state.sideInset
+        if keysLeading?.constant != side { keysLeading?.constant = side }
+        if keysTrailing?.constant != -side { keysTrailing?.constant = -side }
     }
 
     /// Hält Höhe und seitliche Ränder aktuell – wichtig beim Drehen ins Querformat.
@@ -48,6 +100,7 @@ final class KeyboardViewController: UIInputViewController {
             side = 0
         }
         if abs(state.sideInset - side) > 0.5 { state.sideInset = side }
+        syncKeysFrame()
     }
 
     override func viewWillLayoutSubviews() {
@@ -128,6 +181,7 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func disableTouchDelays() {
+        keysView.disableAncestorTouchDelays()
         var v: UIView? = view
         while let current = v {
             current.gestureRecognizers?.forEach { $0.delaysTouchesBegan = false; $0.delaysTouchesEnded = false }

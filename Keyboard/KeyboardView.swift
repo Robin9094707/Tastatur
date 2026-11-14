@@ -219,20 +219,20 @@ struct KeysView: View {
             let unit = state.layer == .letters ? w / 11 : w / 10
             VStack(spacing: 0) {
                 if store.showNumberRow && state.layer == .letters {
-                    row(KeyLayouts.numberRow.map { .char($0) }, unit: w / 10)
+                    row(KeyLayouts.numberRow.map { KeyKind.char($0) }, unit: w / 10)
                 }
                 switch state.layer {
                 case .letters:
-                    row(KeyLayouts.letters[0].map { .char($0) }, unit: unit)
-                    row(KeyLayouts.letters[1].map { .char($0) }, unit: unit)
+                    row(KeyLayouts.letters[0].map { KeyKind.char($0) }, unit: unit)
+                    row(KeyLayouts.letters[1].map { KeyKind.char($0) }, unit: unit)
                     thirdRow(KeyLayouts.letters[2], total: w, unit: unit, left: .shift)
                 case .numbers:
-                    row(KeyLayouts.numbers[0].map { .char($0) }, unit: unit)
-                    row(KeyLayouts.numbers[1].map { .char($0) }, unit: unit)
+                    row(KeyLayouts.numbers[0].map { KeyKind.char($0) }, unit: unit)
+                    row(KeyLayouts.numbers[1].map { KeyKind.char($0) }, unit: unit)
                     thirdRow(KeyLayouts.numbers[2], total: w, unit: w / 7.5, left: .symbols)
                 case .symbols:
-                    row(KeyLayouts.symbols[0].map { .char($0) }, unit: unit)
-                    row(KeyLayouts.symbols[1].map { .char($0) }, unit: unit)
+                    row(KeyLayouts.symbols[0].map { KeyKind.char($0) }, unit: unit)
+                    row(KeyLayouts.symbols[1].map { KeyKind.char($0) }, unit: unit)
                     thirdRow(KeyLayouts.symbols[2], total: w, unit: w / 7.5, left: .numbersFromSymbols)
                 }
                 bottomRow(total: w)

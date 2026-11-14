@@ -245,7 +245,7 @@ final class KeyboardState: ObservableObject {
     private func commitWord(trailing: String) {
         let word = currentWord
         let prev = previousWord
-        var final = word
+        var finalWord = word
 
         if !word.isEmpty {
             if store.macroAutoExpand, let macro = store.macros.first(where: { !$0.shortcut.isEmpty && $0.shortcut.lowercased() == word.lowercased() }) {
@@ -264,13 +264,13 @@ final class KeyboardState: ObservableObject {
                 deleteChars(word.count)
                 proxy?.insertText(corr + trailing)
                 undoCorrection = (word, corr, trailing)
-                final = corr
+                finalWord = corr
                 store.incrementStat("corrections")
-                engine.learn(word: final, previous: prev)
+                engine.learn(word: finalWord, previous: prev)
                 afterCommit()
                 return
             }
-            engine.learn(word: final, previous: prev)
+            engine.learn(word: finalWord, previous: prev)
         }
         proxy?.insertText(trailing)
         undoCorrection = nil

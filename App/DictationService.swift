@@ -144,11 +144,7 @@ final class DictationService: ObservableObject {
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         input.removeTap(onBus: 0)
-        let writer = self.writer
-        input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
-            writer.write(buffer)
-            self?.handle(buffer: buffer)
-        }
+        input.installTap(onBus: 0, bufferSize: 2048, format: format, block: Self.makeTap(writer: writer, owner: self))
         engine.prepare()
         try engine.start()
     }
@@ -157,6 +153,14 @@ final class DictationService: ObservableObject {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+    }
+
+    /// Wird außerhalb des MainActors erzeugt, damit der Audio-Thread keine Isolationsprüfung auslöst.
+    nonisolated private static func makeTap(writer: AudioWriter, owner: DictationService) -> AVAudioNodeTapBlock {
+        return { [weak owner] buffer, _ in
+            writer.write(buffer)
+            owner?.handle(buffer: buffer)
+        }
     }
 
     nonisolated private func handle(buffer: AVAudioPCMBuffer) {

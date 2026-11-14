@@ -33,7 +33,7 @@ final class SharedStore: ObservableObject {
 
     static let defaultChatModel = "gpt-6-luna"
     static let fallbackModels = ["gpt-6-luna", "gpt-5.6-luna", "gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"]
-    static let settingsVersion = 5
+    static let settingsVersion = 6
 
     @Published var apiKey: String = "" { didSet { set(apiKey, "apiKey") } }
     @Published var baseURL: String = "https://api.openai.com/v1" { didSet { set(baseURL, "baseURL") } }
@@ -87,6 +87,8 @@ final class SharedStore: ObservableObject {
     // KI-Vorschläge: "manual" (Knopf), "occasional" (gelegentlich), "off"
     @Published var aiSuggestMode: String = "manual" { didSet { set(aiSuggestMode, "aiSuggestMode") } }
     @Published var translateTarget: String = "Englisch" { didSet { set(translateTarget, "translateTarget") } }
+    @Published var commands: [SavedCommand] = SavedCommand.defaults { didSet { setCodable(commands, "commands") } }
+    @Published var commandEdition: String = "Bedrock" { didSet { set(commandEdition, "commandEdition") } }
     @Published var toolbarItems: [String] = ToolItem.defaultOrder { didSet { setCodable(toolbarItems, "toolbarItems") } }
 
     // Tippkontrolle
@@ -151,6 +153,8 @@ final class SharedStore: ObservableObject {
         upd(\.smartTouch, bool("smartTouch", true))
         upd(\.aiSuggestMode, d.string(forKey: "aiSuggestMode") ?? "manual")
         upd(\.translateTarget, d.string(forKey: "translateTarget") ?? "Englisch")
+        upd(\.commands, getCodable("commands") ?? SavedCommand.defaults)
+        upd(\.commandEdition, d.string(forKey: "commandEdition") ?? "Bedrock")
         upd(\.toolbarItems, getCodable("toolbarItems") ?? ToolItem.defaultOrder)
         upd(\.liveAICorrection, bool("liveAICorrection", true))
     }
@@ -219,6 +223,10 @@ final class SharedStore: ObservableObject {
         if let scope = d.string(forKey: "aiScope"), AIScope(rawValue: scope) == nil { d.removeObject(forKey: "aiScope") }
         if version < 3 { d.set(true, forKey: "aiSuggestions") }
         if version < 5 { d.set("manual", forKey: "aiSuggestMode") }
+        if version < 6, let data = d.data(forKey: "toolbarItems"), var items = try? JSONDecoder().decode([String].self, from: data) {
+            if !items.contains("commands") { items.insert("commands", at: min(2, items.count)) }
+            if let newData = try? JSONEncoder().encode(items) { d.set(newData, forKey: "toolbarItems") }
+        }
         for key in ["transcribeModel", "dictationLanguage", "dictationCleanup", "dictationVocabulary", "dictationSessionMinutes"] {
             d.removeObject(forKey: key)
         }

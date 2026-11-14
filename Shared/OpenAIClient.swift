@@ -240,6 +240,20 @@ final class OpenAIClient {
         return Self.cleanup(result)
     }
 
+    /// Erzeugt Minecraft-Befehle aus einer Beschreibung.
+    func minecraftCommand(_ description: String, edition: String, onPartial: ((String) -> Void)? = nil) async throws -> String {
+        let result = try await chat(messages: [
+            ChatMessage(role: "system", content: """
+            Du bist Experte für Minecraft-Befehle (\(edition) Edition, aktuelle Version).
+            Erzeuge aus der Beschreibung gültige, sofort funktionierende Befehle mit korrekter Syntax für die \(edition) Edition.
+            Gib NUR die Befehle zurück, jeder beginnt mit „/“ und steht in einer eigenen Zeile. Keine Erklärungen, kein Markdown.
+            Nutze @s für den Spieler selbst, sofern nichts anderes verlangt wird.
+            """),
+            ChatMessage(role: "user", content: description),
+        ], stream: true, onPartial: onPartial)
+        return Self.cleanup(result).replacingOccurrences(of: "`", with: "")
+    }
+
     struct TypoFix {
         var wrong: String
         var right: String

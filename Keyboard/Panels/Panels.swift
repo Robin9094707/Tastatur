@@ -253,6 +253,16 @@ struct ResultPanel: View {
     private var refineStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
+                if state.lastResultIsCommand {
+                    Button { state.saveResultAsCommands() } label: {
+                        Label("Als Befehl speichern", systemImage: "square.and.arrow.down")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .frame(height: 30)
+                            .glassCapsule(tint: state.tint.opacity(0.5), interactive: true)
+                    }
+                    .buttonStyle(.plain)
+                }
                 Button { state.startCompose(refine: true) } label: {
                     Label("Anpassen …", systemImage: "slider.horizontal.3")
                         .font(.caption.weight(.semibold))
@@ -1304,5 +1314,123 @@ struct TranslatePanel: View {
             }
             .padding(8)
         }
+    }
+}
+
+// MARK: - Befehle (Minecraft & Co.)
+
+struct CommandsPanel: View {
+    @ObservedObject var state: KeyboardState
+    @ObservedObject var store = SharedStore.shared
+    @State private var filter = "fav"
+    @State private var confirmDelete: UUID?
+
+    private var groups: [String] {
+        var seen: [String] = []
+        for c in store.commands where !seen.contains(c.group) { seen.append(c.group) }
+        return seen
+    }
+
+    private var filtered: [SavedCommand] {
+        switch filter {
+        case "fav":
+            let favs = store.commands.filter(\.favorite)
+            return favs.isEmpty ? store.commands : favs
+        case "all": return store.commands
+        default: return store.commands.filter { $0.group == filter }
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    action("✨ KI-Befehl", "terminal") { state.startCommandAI() }
+                    action("Zeile speichern", "square.and.arrow.down") { state.saveFieldAsCommand() }
+                    action("Aus Ablage", "doc.on.clipboard") { state.saveClipboardAsCommand() }
+                    Button {
+                        store.commandEdition = store.commandEdition == "Bedrock" ? "Java" : "Bedrock"
+                        state.feedback()
+                    } label: {
+                        Text(store.commandEdition == "Bedrock" ? "🧱 Bedrock" : "☕️ Java")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 10).frame(height: 30)
+                            .glassCapsule(interactive: true)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 8)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    chip("★ Favoriten", "fav")
+                    chip("Alle", "all")
+                    ForEach(groups, id: \.self) { g in chip(g, g) }
+                }
+                .padding(.horizontal, 8)
+            }
+            ScrollView {
+                LazyVStack(spacing: 5) {
+                    ForEach(filtered) { c in
+                        HStack(spacing: 8) {
+                            Button { state.toggleCommandFavorite(c) } label: {
+                                Image(systemName: c.favorite ? "star.fill" : "star")
+                                    .foregroundStyle(c.favorite ? Color.yellow : Color.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(c.title).font(.caption.weight(.semibold)).lineLimit(1)
+                                Text(c.command).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            Spacer(minLength: 0)
+                            if confirmDelete == c.id {
+                                Button { state.deleteCommand(c); confirmDelete = nil } label: {
+                                    Image(systemName: "trash.fill").foregroundStyle(.red)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .glass(cornerRadius: 10, interactive: true)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            if confirmDelete == c.id { confirmDelete = nil } else { state.runCommandItem(c) }
+                        }
+                        .onLongPressGesture(minimumDuration: 0.45) {
+                            confirmDelete = c.id
+                            state.feedback(.medium)
+                        }
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 6)
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    private func chip(_ title: String, _ key: String) -> some View {
+        Button {
+            filter = key
+            state.feedback()
+        } label: {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 10).frame(height: 28)
+                .foregroundStyle(filter == key ? Color.white : Color.primary)
+                .glassCapsule(tint: filter == key ? state.tint : nil, interactive: true)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func action(_ title: String, _ symbol: String, _ run: @escaping () -> Void) -> some View {
+        Button(action: run) {
+            Label(title, systemImage: symbol)
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 10).frame(height: 30)
+                .glassCapsule(tint: state.tint.opacity(0.3), interactive: true)
+        }
+        .buttonStyle(.plain)
     }
 }

@@ -58,6 +58,8 @@ struct KeyboardRootView: View {
             CursorPanel(state: state).transition(.opacity)
         case .translate:
             TranslatePanel(state: state).transition(.move(edge: .bottom).combined(with: .opacity))
+        case .commands:
+            CommandsPanel(state: state).transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
 
@@ -137,6 +139,7 @@ struct Toolbar: View {
         case .stickers: return "Sticker"
         case .cursor: return "Cursor & Text"
         case .translate: return "Übersetzen"
+        case .commands: return "Befehle"
         default: return ""
         }
     }

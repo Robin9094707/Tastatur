@@ -17,10 +17,11 @@ enum Panel: Equatable {
     case stickers
     case cursor
     case translate
+    case commands
 }
 
 struct Suggestion: Identifiable, Equatable {
-    enum Kind { case word, typed, correction, macro, ai, phrase, token }
+    enum Kind { case word, typed, correction, macro, ai, phrase, token, command }
     let id = UUID()
     var text: String
     var kind: Kind
@@ -125,7 +126,7 @@ final class KeyboardState: ObservableObject {
 
     /// Wohin die Eingabe im Eingabe-Modus geht (KI-Auftrag oder eine Einstellung).
     enum ComposeTarget: Equatable {
-        case ai, refine, translate, calc, apiKey, baseURL, chatModel, personalContext, writingStyle
+        case ai, refine, translate, calc, mcCommand, apiKey, baseURL, chatModel, personalContext, writingStyle
         case macroShortcut, macroText, profileName, profileContext(UUID), actionTitle, actionPrompt
 
         var placeholder: String {
@@ -134,6 +135,7 @@ final class KeyboardState: ObservableObject {
             case .refine: return "Wie soll das Ergebnis geändert werden?"
             case .translate: return "Tippe in deiner Sprache …"
             case .calc: return "Rechnung, z. B. 12,5*4+3"
+            case .mcCommand: return "Was soll passieren? z. B. „64 Diamanten“"
             case .apiKey: return "OpenAI-API-Schlüssel (sk-…)"
             case .baseURL: return "API-Adresse (https://…/v1)"
             case .chatModel: return "Modellname, z. B. gpt-6-luna"
@@ -154,6 +156,7 @@ final class KeyboardState: ObservableObject {
             case .refine: return "slider.horizontal.3"
             case .translate: return "character.bubble"
             case .calc: return "plus.forwardslash.minus"
+            case .mcCommand: return "terminal"
             case .apiKey: return "key.fill"
             case .baseURL: return "server.rack"
             case .chatModel: return "cpu"
@@ -164,7 +167,7 @@ final class KeyboardState: ObservableObject {
             }
         }
 
-        var isSetting: Bool { self != .ai && self != .refine && self != .translate && self != .calc }
+        var isSetting: Bool { self != .ai && self != .refine && self != .translate && self != .calc && self != .mcCommand }
     }
 
     enum SettingsPage: Equatable { case main, ai, context, design, typing, macros, actions, toolbar }
@@ -340,6 +343,18 @@ final class KeyboardState: ObservableObject {
         return t
     }
 
+    /// Aktuelle Zeile bis zum Cursor.
+    var currentLine: String {
+        let b = before
+        if let i = b.lastIndex(of: "\n") { return String(b[b.index(after: i)...]) }
+        return b
+    }
+
+    /// Befehlsmodus: Zeile beginnt mit „/“ (z. B. Minecraft-Chat) – keine Korrekturen, keine Großschreibung.
+    var isCommandLine: Bool {
+        currentLine.drop(while: { $0 == " " }).first == "/"
+    }
+
     /// Das vorletzte Wort (für Dreier-Folgen).
     var secondPreviousWord: String? {
         let text = String(before.dropLast(currentWord.count))
@@ -385,6 +400,12 @@ final class KeyboardState: ObservableObject {
             return
         }
         let isPunct = output.count == 1 && ".,!?;:".contains(output)
+        if isPunct && isCommandLine {
+            proxy?.insertText(output)
+            if shift == .on { shift = .off }
+            scheduleRefresh()
+            return
+        }
         if isPunct {
             let b = before
             if b.hasSuffix(" "), undoCorrection == nil, let prev = b.dropLast().last, prev.isLetter || prev.isNumber {
@@ -408,7 +429,7 @@ final class KeyboardState: ObservableObject {
         if composeMode { composeText += " "; return }
         let now = Date()
         let b = before
-        if store.doubleSpacePeriod, now.timeIntervalSince(lastSpaceTime) < 0.45, b.hasSuffix(" "),
+        if store.doubleSpacePeriod, !isCommandLine, now.timeIntervalSince(lastSpaceTime) < 0.45, b.hasSuffix(" "),
            let c = b.dropLast().last, c.isLetter || c.isNumber {
             proxy?.deleteBackward()
             proxy?.insertText(". ")
@@ -428,6 +449,13 @@ final class KeyboardState: ObservableObject {
 
     /// Schließt das aktuelle Wort ab: Makros, Textersetzung, Autokorrektur, Lernen.
     private func commitWord(trailing: String) {
+        if isCommandLine {
+            // Befehle exakt so lassen, wie getippt
+            proxy?.insertText(trailing)
+            undoCorrection = nil
+            afterCommit()
+            return
+        }
         let word = currentWord
         let prev = previousWord
         let token = currentToken
@@ -596,6 +624,7 @@ final class KeyboardState: ObservableObject {
 
     func updateAutoShift() {
         guard layer == .letters, shift != .caps, !composeMode else { return }
+        if isCommandLine { if shift != .off { shift = .off }; return }
         var newShift: ShiftState = .off
         if store.autocapitalize, let proxy {
             let type = proxy.autocapitalizationType ?? .sentences
@@ -633,6 +662,17 @@ final class KeyboardState: ObservableObject {
         aiSuggestionTask?.cancel()
         aiThinking = false
         if composeMode || (panel != .none && panel != .tools) { return }
+        if isCommandLine {
+            let line = currentLine.trimmingCharacters(in: .whitespaces).lowercased()
+            let matches = store.commands.filter { line.count <= 1 || $0.command.lowercased().hasPrefix(line) || $0.title.lowercased().contains(line.dropFirst()) }
+                .sorted { a, b in a.favorite != b.favorite ? a.favorite : false }
+                .prefix(8)
+                .map { Suggestion(text: $0.command, kind: .command, display: $0.command) }
+            let newList = Array(matches)
+            if newList.map(\.text) != suggestions.map(\.text) { suggestions = newList }
+            aiPhrase = nil
+            return
+        }
         let word = currentWord
         var list: [Suggestion] = []
         let token = currentToken
@@ -778,6 +818,8 @@ final class KeyboardState: ObservableObject {
             proxy?.insertText(" ")
             undoCorrection = nil
             afterCommit()
+        case .command:
+            insertCommand(s.text)
         case .token:
             deleteChars(currentToken.count)
             proxy?.insertText(s.text + " ")
@@ -950,6 +992,7 @@ final class KeyboardState: ObservableObject {
         aiStatus = "Bereite vor …"
         aiShowDiff = showDiff
         aiDiff = nil
+        lastResultIsCommand = false
         composeMode = false
         panel = .result
         store.incrementStat("aiActions")
@@ -988,6 +1031,7 @@ final class KeyboardState: ObservableObject {
         aiStatus = "KI schreibt …"
         aiShowDiff = showDiff
         aiDiff = nil
+        lastResultIsCommand = false
         replaceTarget = target
         composeMode = false
         panel = .result
@@ -1113,6 +1157,14 @@ final class KeyboardState: ObservableObject {
             refine(text)
             return
         }
+        if target == .mcCommand {
+            let edition = store.commandEdition
+            runAI(title: "Minecraft-Befehl (\(edition))", original: "", target: .none, showDiff: false) { [client = self.client] partial in
+                try await client.minecraftCommand(text, edition: edition, onPartial: partial)
+            }
+            lastResultIsCommand = true
+            return
+        }
         let context = store.useAppContext ? String((before + after).suffix(8000)) : nil
         runAI(title: "„\(text.prefix(30))“", original: "", target: .none, showDiff: false) { [client = self.client] partial in
             try await client.compose(prompt: text, context: context, onPartial: partial)
@@ -1172,7 +1224,7 @@ final class KeyboardState: ObservableObject {
             store.actions.append(AIAction(title: pendingMacroShortcut, symbol: "wand.and.stars", prompt: text))
             showToast("KI-Aktion „\(pendingMacroShortcut)“ angelegt ✓")
             pendingMacroShortcut = ""
-        case .ai, .refine, .translate, .calc:
+        case .ai, .refine, .translate, .calc, .mcCommand:
             break
         }
     }
@@ -1626,6 +1678,81 @@ final class KeyboardState: ObservableObject {
         }
     }
 
+    // MARK: - Befehle (Minecraft & Co.)
+
+    @Published var lastResultIsCommand = false
+
+    /// Fügt einen Befehl ein – ersetzt eine angefangene Befehlszeile.
+    func insertCommand(_ cmd: String) {
+        feedback(.medium)
+        if composeMode { composeText += cmd; return }
+        if isCommandLine { deleteChars(currentLine.count) }
+        else if let last = before.last, !last.isWhitespace { proxy?.insertText(" ") }
+        proxy?.insertText(cmd)
+        undoCorrection = nil
+        if panel == .commands { panel = .none }
+        scheduleRefresh()
+    }
+
+    func runCommandItem(_ c: SavedCommand) {
+        // Mehrzeilige KI-Ergebnisse: nur die erste Zeile einfügen
+        insertCommand(c.command)
+    }
+
+    func saveCommand(_ text: String, title: String? = nil) {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { showToast("Kein Text zum Speichern."); return }
+        let name = title ?? String(t.replacingOccurrences(of: "/", with: "").prefix(28))
+        store.commands.insert(SavedCommand(title: name, command: t, group: store.commands.first?.group ?? "Minecraft"), at: 0)
+        feedback(.medium)
+        showToast("Befehl gespeichert ✓")
+    }
+
+    func saveFieldAsCommand() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let sel = self.selected
+            let text = sel.isEmpty ? self.currentLine : sel
+            if text.trimmingCharacters(in: .whitespaces).isEmpty {
+                let full = await self.readFullText()
+                self.saveCommand(full)
+            } else {
+                self.saveCommand(text)
+            }
+        }
+    }
+
+    func saveClipboardAsCommand() {
+        guard hasFullAccess, let s = UIPasteboard.general.string else {
+            showToast("Zwischenablage leer oder kein voller Zugriff.")
+            return
+        }
+        saveCommand(s)
+    }
+
+    func deleteCommand(_ c: SavedCommand) {
+        store.commands.removeAll { $0.id == c.id }
+        showToast("Befehl gelöscht")
+    }
+
+    func toggleCommandFavorite(_ c: SavedCommand) {
+        if let i = store.commands.firstIndex(where: { $0.id == c.id }) { store.commands[i].favorite.toggle() }
+        feedback()
+    }
+
+    func startCommandAI() {
+        guard requireAI() else { return }
+        beginInput(.mcCommand)
+    }
+
+    /// Speichert das aktuelle KI-Ergebnis (jede Zeile ein Befehl).
+    func saveResultAsCommands() {
+        let lines = aiResult.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        for l in lines.reversed() { store.commands.insert(SavedCommand(title: String(l.replacingOccurrences(of: "/", with: "").prefix(28)), command: l), at: 0) }
+        feedback(.medium)
+        showToast(lines.count == 1 ? "Befehl gespeichert ✓" : "\(lines.count) Befehle gespeichert ✓")
+    }
+
     // MARK: - Rechner
 
     func startCalculator() { beginInput(.calc) }
@@ -1655,6 +1782,7 @@ final class KeyboardState: ObservableObject {
         case "translateLive": startTranslateMode()
         case "translateClip": translateClipboard()
         case "write": startCompose()
+        case "commands": toggle(.commands)
         case "clipboard": toggle(.clipboard)
         case "stickers": toggle(.stickers)
         case "emoji": toggle(.emoji)

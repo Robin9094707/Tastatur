@@ -285,3 +285,35 @@ extension String {
         split { $0.isWhitespace || $0.isNewline }.count
     }
 }
+
+/// Gespeicherter Befehl / Snippet (z. B. Minecraft-Befehle).
+struct SavedCommand: Codable, Identifiable, Hashable {
+    var id = UUID()
+    var title: String
+    var command: String
+    var group: String = "Minecraft"
+    var favorite = false
+
+    static let defaults: [SavedCommand] = [
+        SavedCommand(title: "Kreativmodus", command: "/gamemode creative", group: "Minecraft", favorite: true),
+        SavedCommand(title: "Überlebensmodus", command: "/gamemode survival", group: "Minecraft", favorite: true),
+        SavedCommand(title: "Zuschauermodus", command: "/gamemode spectator", group: "Minecraft"),
+        SavedCommand(title: "Tag", command: "/time set day", group: "Minecraft", favorite: true),
+        SavedCommand(title: "Nacht", command: "/time set night", group: "Minecraft"),
+        SavedCommand(title: "Klares Wetter", command: "/weather clear", group: "Minecraft", favorite: true),
+        SavedCommand(title: "Inventar behalten", command: "/gamerule keepInventory true", group: "Minecraft"),
+        SavedCommand(title: "Kein Mob-Griefing", command: "/gamerule mobGriefing false", group: "Minecraft"),
+        SavedCommand(title: "Tageszeit anhalten", command: "/gamerule doDaylightCycle false", group: "Minecraft"),
+        SavedCommand(title: "Koordinaten zeigen", command: "/gamerule showCoordinates true", group: "Minecraft"),
+        SavedCommand(title: "64 Diamanten", command: "/give @s diamond 64", group: "Minecraft"),
+        SavedCommand(title: "Netherit-Schwert", command: "/give @s netherite_sword", group: "Minecraft"),
+        SavedCommand(title: "Nachtsicht", command: "/effect @s night_vision 99999 0 true", group: "Minecraft"),
+        SavedCommand(title: "Heilen", command: "/effect @s instant_health 1 10 true", group: "Minecraft"),
+        SavedCommand(title: "Zum Spawn", command: "/tp @s 0 100 0", group: "Minecraft"),
+        SavedCommand(title: "Dorf finden", command: "/locate structure village", group: "Minecraft"),
+        SavedCommand(title: "Items am Boden löschen", command: "/kill @e[type=item]", group: "Minecraft"),
+        SavedCommand(title: "Spawnpunkt hier", command: "/spawnpoint @s ~ ~ ~", group: "Minecraft"),
+        SavedCommand(title: "Fliegen (Bedrock)", command: "/ability @s mayfly true", group: "Minecraft"),
+        SavedCommand(title: "XP-Level +30", command: "/xp 30L @s", group: "Minecraft"),
+    ]
+}

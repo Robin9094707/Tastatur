@@ -11,6 +11,7 @@ struct ToolItem: Identifiable, Hashable {
     static let all: [ToolItem] = [
         ToolItem(id: "ai", title: "KI", symbol: "wand.and.stars"),
         ToolItem(id: "translate", title: "Übersetzen", symbol: "character.bubble"),
+        ToolItem(id: "translateLive", title: "Live übersetzen", symbol: "text.bubble"),
         ToolItem(id: "translateClip", title: "Ablage übersetzen", symbol: "doc.on.clipboard.fill"),
         ToolItem(id: "write", title: "Schreiben", symbol: "pencil.line"),
         ToolItem(id: "clipboard", title: "Ablage", symbol: "doc.on.clipboard"),

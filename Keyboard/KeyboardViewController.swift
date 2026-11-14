@@ -5,6 +5,7 @@ final class KeyboardViewController: UIInputViewController {
     private var state: KeyboardState?
     private var host: UIHostingController<KeyboardRootView>!
     private var heightConstraint: NSLayoutConstraint?
+    private var lastLandscape: Bool?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -27,6 +28,46 @@ final class KeyboardViewController: UIInputViewController {
         ])
         state.onHeightChange = { [weak self] h in self?.setHeight(h) }
         setHeight(state.totalHeight)
+    }
+
+    /// Hält Höhe und seitliche Ränder aktuell – wichtig beim Drehen ins Querformat.
+    private func updateLayoutMetrics() {
+        guard let state else { return }
+        if lastLandscape != state.isLandscape {
+            lastLandscape = state.isLandscape
+            state.objectWillChange.send() // SwiftUI-Höhen neu berechnen
+        }
+        let h = state.totalHeight
+        if heightConstraint?.constant != h { setHeight(h) }
+        let insets = view.window?.safeAreaInsets ?? view.safeAreaInsets
+        var side = max(insets.left, insets.right, view.safeAreaInsets.left, view.safeAreaInsets.right)
+        if state.isLandscape && !state.isPad {
+            // Wie bei der Apple-Tastatur: im Querformat etwas Abstand zu den runden Ecken
+            side = max(side, 44)
+        } else {
+            side = 0
+        }
+        if abs(state.sideInset - side) > 0.5 { state.sideInset = side }
+    }
+
+    override func viewWillLayoutSubviews() {
+        super.viewWillLayoutSubviews()
+        updateLayoutMetrics()
+    }
+
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        updateLayoutMetrics()
+    }
+
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        coordinator.animate(alongsideTransition: { [weak self] _ in
+            self?.updateLayoutMetrics()
+        }, completion: { [weak self] _ in
+            self?.updateLayoutMetrics()
+            self?.view.setNeedsLayout()
+        })
     }
 
     override func didReceiveMemoryWarning() {

@@ -476,7 +476,7 @@ struct EmojiPanel: View {
                                         .padding(.leading, 6)
                                         .padding(.top, 8)
                                 } else {
-                                    LazyHGrid(rows: Array(repeating: GridItem(.fixed(40), spacing: 0), count: 4), spacing: 0) {
+                                    LazyHGrid(rows: Array(repeating: GridItem(.fixed(40), spacing: 0), count: state.keysHeight < 200 ? 2 : 4), spacing: 0) {
                                         ForEach(Array(sec.emojis.enumerated()), id: \.offset) { _, e in
                                             EmojiCell(emoji: e, isFavorite: store.emojiFavorites.contains(e)) {
                                                 state.insertEmoji(e)
@@ -1251,5 +1251,58 @@ struct CursorPanel: View {
             .glass(cornerRadius: 12, interactive: true)
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Übersetzen (Text aus dem Feld)
+
+struct TranslatePanel: View {
+    @ObservedObject var state: KeyboardState
+    @ObservedObject var store = SharedStore.shared
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                if !state.hasFullAccess || !store.hasAPIKey {
+                    MissingSetupBanner(state: state)
+                }
+                Text(state.selected.isEmpty ? "Übersetzt den ganzen Text im Feld – tippe auf eine Sprache:" : "Übersetzt den markierten Text – tippe auf eine Sprache:")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 6)], spacing: 6) {
+                    ForEach(Languages.all, id: \.name) { lang in
+                        Button { state.translateField(to: lang.name) } label: {
+                            HStack(spacing: 6) {
+                                Text(lang.flag).font(.system(size: 18))
+                                Text(lang.name).font(.footnote.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.8)
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 10)
+                            .frame(height: 38)
+                            .foregroundStyle(store.translateTarget == lang.name ? Color.white : Color.primary)
+                            .glass(cornerRadius: 12, tint: store.translateTarget == lang.name ? state.tint : nil, interactive: true)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                HStack(spacing: 6) {
+                    Button { state.startTranslateMode() } label: {
+                        Label("Live tippen & übersetzen", systemImage: "text.bubble")
+                            .font(.caption.weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 36)
+                            .glass(cornerRadius: 12, tint: state.tint.opacity(0.3), interactive: true)
+                    }
+                    .buttonStyle(.plain)
+                    Button { state.translateClipboard() } label: {
+                        Label("Ablage übersetzen", systemImage: "doc.on.clipboard")
+                            .font(.caption.weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 36)
+                            .glass(cornerRadius: 12, interactive: true)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(8)
+        }
     }
 }

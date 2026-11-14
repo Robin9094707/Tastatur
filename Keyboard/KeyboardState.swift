@@ -16,6 +16,7 @@ enum Panel: Equatable {
     case settings
     case stickers
     case cursor
+    case translate
 }
 
 struct Suggestion: Identifiable, Equatable {
@@ -191,13 +192,22 @@ final class KeyboardState: ObservableObject {
 
     var onHeightChange: ((CGFloat) -> Void)?
 
-    var toolbarHeight: CGFloat { composeMode && composeTarget == .translate ? 96 : 48 }
-    var keyRowHeight: CGFloat {
+    var isLandscape: Bool {
         let size = controller?.view.window?.windowScene?.screen.bounds.size ?? UIScreen.main.bounds.size
-        let landscape = size.width > size.height
-        if UIDevice.current.userInterfaceIdiom == .pad { return landscape ? 60 : 64 }
-        return landscape ? 40 : 55
+        return size.width > size.height
     }
+    var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
+    var toolbarHeight: CGFloat {
+        let compact = isLandscape && !isPad
+        if composeMode && composeTarget == .translate { return compact ? 82 : 96 }
+        return compact ? 42 : 48
+    }
+    var keyRowHeight: CGFloat {
+        if isPad { return isLandscape ? 60 : 64 }
+        return isLandscape ? 39 : 55
+    }
+    /// Seitlicher Abstand im Querformat (Notch / Dynamic Island / runde Ecken)
+    @Published var sideInset: CGFloat = 0
     var rowCount: Int { store.showNumberRow && layer == .letters ? 5 : 4 }
     var keysHeight: CGFloat { CGFloat(rowCount) * keyRowHeight + 8 }
     var totalHeight: CGFloat { toolbarHeight + keysHeight }
@@ -887,7 +897,8 @@ final class KeyboardState: ObservableObject {
     }
 
     @MainActor
-    private func gatherSource() async -> (text: String, target: ReplaceTarget, context: String?)? {
+    private func gatherSource(mode: AIScope? = nil) async -> (text: String, target: ReplaceTarget, context: String?)? {
+        let sourceMode = mode ?? self.sourceMode
         if sourceMode == .clipboard {
             guard let s = UIPasteboard.general.string, !s.isEmpty else {
                 showToast("Die Zwischenablage ist leer.")
@@ -1586,6 +1597,20 @@ final class KeyboardState: ObservableObject {
         }
     }
 
+    /// Übersetzt den Text, der schon im Feld steht (oder die Markierung) – mit „Ersetzen“.
+    func translateField(to lang: String) {
+        guard requireAI() else { return }
+        store.translateTarget = lang
+        let fallback = lang == "Deutsch" ? "Englische" : "Deutsche"
+        let instruction = "Übersetze den Text natürlich und idiomatisch ins \(lang) – so, wie ein Muttersprachler schreiben würde. Behalte Ton, Emojis, Zeilenumbrüche, Namen, Zahlen und Links bei. Ist der Text bereits auf \(lang), übersetze ihn stattdessen ins \(fallback). Gib nur die Übersetzung zurück."
+        startAI(title: "Übersetzung → \(Languages.flag(lang)) \(lang)", showDiff: false) { [weak self] in
+            guard let self else { return nil }
+            return await self.gatherSource(mode: .auto)
+        } work: { [client = self.client] text, _, partial in
+            try await client.transform(text: text, instruction: instruction, appContext: nil, onPartial: partial)
+        }
+    }
+
     /// Kopierten Text übersetzen und als Ergebnis anzeigen.
     func translateClipboard() {
         guard requireAI() else { return }
@@ -1626,7 +1651,8 @@ final class KeyboardState: ObservableObject {
     func runTool(_ id: String) {
         switch id {
         case "ai": toggle(.ai)
-        case "translate": startTranslateMode()
+        case "translate": toggle(.translate)
+        case "translateLive": startTranslateMode()
         case "translateClip": translateClipboard()
         case "write": startCompose()
         case "clipboard": toggle(.clipboard)
@@ -1804,6 +1830,7 @@ final class KeyboardState: ObservableObject {
         panel = panel == p ? .none : p
         if panel == .clipboard { reloadClips() }
         if panel == .stickers { reloadStickers() }
+        onHeightChange?(totalHeight)
         if panel == .none { refreshSuggestionsNow() }
     }
 

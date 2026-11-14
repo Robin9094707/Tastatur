@@ -14,6 +14,7 @@ struct KeyboardRootView: View {
                 .frame(height: state.keysHeight)
                 .zIndex(1)
         }
+        .padding(.horizontal, state.sideInset)
         .background(KeyboardBackgroundView(store: store, scheme: scheme))
         .environment(\.colorScheme, forcedScheme ?? scheme)
         .overlay(alignment: .top) {
@@ -55,6 +56,8 @@ struct KeyboardRootView: View {
             StickerPanel(state: state).transition(.move(edge: .bottom).combined(with: .opacity))
         case .cursor:
             CursorPanel(state: state).transition(.opacity)
+        case .translate:
+            TranslatePanel(state: state).transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
 
@@ -133,6 +136,7 @@ struct Toolbar: View {
         case .settings: return "Einstellungen"
         case .stickers: return "Sticker"
         case .cursor: return "Cursor & Text"
+        case .translate: return "Übersetzen"
         default: return ""
         }
     }

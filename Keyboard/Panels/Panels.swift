@@ -1141,6 +1141,9 @@ struct KeyboardSettingsPanel: View {
     private var typingPage: some View {
         VStack(alignment: .leading, spacing: 10) {
             typingToggles
+            Text("Power-Tippen: „Lernende Zonen“ passt die Tasten an deine Finger an, „Tipp-Korrektur“ repariert Vertipper über die echten Tipp-Positionen, „KI-Turbo“ korrigiert schon nach wenigen Wörtern.")
+                .font(.caption2).foregroundStyle(.secondary)
+            actionButton("Trefferzonen zurücksetzen", "scope") { state.resetTouchModel() }
             if store.haptics { hapticSettings }
             LearnedTokensView(state: state)
         }
@@ -1189,6 +1192,9 @@ struct KeyboardSettingsPanel: View {
             toggle("Wischen", "scribble.variable", $store.swipeTyping)
             toggle("KI beim Wischen", "sparkles", $store.swipeAI)
             toggle("Trefferzonen", "hand.point.up.braille", $store.smartTouch)
+            toggle("Lernende Zonen", "scope", $store.adaptiveTouch)
+            toggle("Tipp-Korrektur", "hand.tap", $store.tapCorrection)
+            toggle("KI-Turbo", "bolt.fill", $store.aiTypoTurbo)
             toggle("Großschreibung", "textformat.size.larger", $store.autocapitalize)
             toggle("Doppel-Leer = .", "circle.fill", $store.doubleSpacePeriod)
             toggle("Wörter lernen", "brain", $store.learnWords)

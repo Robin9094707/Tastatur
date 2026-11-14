@@ -8,6 +8,8 @@ final class SwipeDecoder {
     static let shared = SwipeDecoder()
 
     private var byEnds: [String: [(word: String, rank: Int)]] = [:]
+    private var byLength: [Int: [(word: String, rank: Int)]] = [:]
+    private var rankOf: [String: Int] = [:]
     private(set) var ready = false
     private var loading = false
 
@@ -16,16 +18,22 @@ final class SwipeDecoder {
         loading = true
         DispatchQueue.global(qos: .utility).async { [weak self] in
             var map: [String: [(word: String, rank: Int)]] = [:]
+            var lengths: [Int: [(word: String, rank: Int)]] = [:]
+            var ranks: [String: Int] = [:]
             if let url = Bundle.main.url(forResource: "swipe-words", withExtension: "txt"),
                let text = try? String(contentsOf: url, encoding: .utf8) {
                 var rank = 0
                 text.enumerateLines { line, _ in
                     guard let f = line.first, let l = line.last else { return }
                     map[Self.endsKey(f, l), default: []].append((line, rank))
+                    if line.count >= 2, line.count <= 18 { lengths[line.count, default: []].append((line, rank)) }
+                    if ranks[line] == nil { ranks[line] = rank }
                     rank += 1
                 }
             }
             DispatchQueue.main.async {
+                self?.byLength = lengths
+                self?.rankOf = ranks
                 self?.byEnds = map
                 self?.ready = true
                 self?.loading = false
@@ -34,6 +42,42 @@ final class SwipeDecoder {
     }
 
     static func keyChar(_ c: Character) -> Character { c == "ß" ? "s" : c }
+
+    /// Häufigkeitsrang eines Wortes (nil = unbekannt).
+    func rank(of word: String) -> Int? { rankOf[word.lowercased()] }
+
+    // MARK: Tipp-Korrektur über die echten Fingerpositionen
+
+    /// Findet das Wort gleicher Länge, das am besten zu den getippten Punkten passt.
+    /// Rückgabe: Wort, räumliche Kosten (Summe der quadrierten Abstände in Tastenbreiten) und Gesamtwert.
+    func tapCorrect(typed: String, taps: [CGPoint], centers: [Character: CGPoint], kw: CGFloat,
+                    learned: [String: Int], context: (String) -> Double) -> (word: String, spatial: Double, score: Double)? {
+        let n = typed.count
+        guard ready, n >= 2, taps.count == n, kw > 0 else { return nil }
+        var pool = byLength[n] ?? []
+        for (w, c) in learned where w.count == n && rankOf[w] == nil { pool.append((w, max(0, 3000 - c * 200))) }
+        let limit = 3.2 + Double(n) * 0.25
+        var best: (String, Double, Double)?
+        for (word, rank) in pool {
+            var cost = 0.0
+            var i = 0
+            var ok = true
+            for ch in word {
+                guard let c = centers[Self.keyChar(ch)] else { ok = false; break }
+                let t = taps[i]
+                // horizontal genauer als vertikal (Reihenhöhe > Tastenbreite)
+                let dx = Double((t.x - c.x) / kw), dy = Double((t.y - c.y) / (kw * 1.45))
+                cost += dx * dx + dy * dy
+                if cost > limit { ok = false; break }
+                i += 1
+            }
+            guard ok else { continue }
+            let learnedBonus = learned[word].map { min(0.8, Double($0) * 0.1) } ?? 0
+            let score = cost + log(Double(rank) + 2) * 0.22 - learnedBonus - context(word)
+            if best == nil || score < best!.2 { best = (word, cost, score) }
+        }
+        return best.map { ($0.0, $0.1, $0.2) }
+    }
     static func endsKey(_ f: Character, _ l: Character) -> String { String(keyChar(f)) + String(keyChar(l)) }
 
     struct Input {

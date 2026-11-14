@@ -206,14 +206,31 @@ final class TextEngine {
 
     // MARK: - Gesten-Tippen
 
+    private var swipeLearnedCache: [String: Int]?
+
     /// Gelernte Wörter (klein) für das Wischen – nur mehrfach benutzte.
     func swipeLearned() -> [String: Int] {
+        if let c = swipeLearnedCache { return c }
         var out: [String: Int] = [:]
         for (w, c) in learned where c >= 2 && w.count >= 2 {
             out[w.lowercased(), default: 0] += c
         }
+        swipeLearnedCache = out
         return out
     }
+
+    /// Richtig geschrieben laut Systemwörterbuch (Deutsch oder Englisch)?
+    func spelledCorrectly(_ word: String) -> Bool {
+        let ns = word as NSString
+        let range = NSRange(location: 0, length: ns.length)
+        if checker.rangeOfMisspelledWord(in: word, range: range, startingAt: 0, wrap: false, language: language).location == NSNotFound { return true }
+        if !warmedUp { warmUp() }
+        if let en = englishLanguage,
+           checker.rangeOfMisspelledWord(in: word, range: range, startingAt: 0, wrap: false, language: en).location == NSNotFound { return true }
+        return false
+    }
+
+    func casedLike(_ typed: String, _ word: String) -> String { matchCase(of: typed, word) }
 
     func bigramCount(_ prev: String, _ word: String) -> Int {
         guard let next = bigrams[prev.lowercased()] else { return 0 }
@@ -247,6 +264,7 @@ final class TextEngine {
         guard store.learnWords, word.count >= 2, word.count <= 40,
               word.rangeOfCharacter(from: .letters) != nil else { return }
         learned[word, default: 0] += weight
+        swipeLearnedCache = nil
         var p = ""
         for ch in word.lowercased().prefix(16) { p.append(ch); prefixes.insert(p) }
         if let prev = previous?.lowercased(), !prev.isEmpty {

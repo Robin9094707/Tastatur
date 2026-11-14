@@ -470,16 +470,50 @@ final class KeysView: UIView {
             }
             y += rowHeight
         }
+        reportGeometry()
+    }
+
+    /// Teilt dem Zustand die Tastenmitten mit (für Tipp-Korrektur und Lernen der Trefferzonen).
+    private func reportGeometry() {
+        guard config?.layer == .letters, let state else { return }
+        var centers: [Character: CGPoint] = [:]
+        for k in keys {
+            if case .char(let c) = k.kind, c.count == 1, let ch = c.lowercased().first, ch.isLetter {
+                centers[ch] = CGPoint(x: k.frame.midX, y: k.frame.midY)
+            }
+        }
+        state.keyGeometry = KeyboardState.KeyGeometry(centers: centers, keyWidth: letterKeyWidth, rowHeight: rowHeight)
     }
 
     // MARK: Treffer
 
     private func key(at p: CGPoint) -> KeyCapView? {
+        // Buchstaben: persönliche Trefferzonen (gelernte Abweichung je Taste)
+        if config?.layer == .letters, let state, state.store.adaptiveTouch, let k = adaptiveLetter(at: p, state) { return k }
         if let k = keys.first(where: { $0.cellFrame.contains(p) }) { return k }
         // nächstgelegene Taste (z. B. Berührung ganz am Rand)
         return keys.min { a, b in
             dist(a.cellFrame, p) < dist(b.cellFrame, p)
         }
+    }
+
+    /// Wählt den Buchstaben, dessen (persönlich verschobene) Mitte am nächsten liegt.
+    private func adaptiveLetter(at p: CGPoint, _ state: KeyboardState) -> KeyCapView? {
+        guard let hit = keys.first(where: { $0.cellFrame.contains(p) }) else { return nil }
+        guard case .char(let hc) = hit.kind, hc.count == 1, hc.first?.isLetter == true else { return hit }
+        let model = state.touchModel
+        guard !model.isEmpty else { return hit }
+        let kw = max(hit.frame.width, 1), kh = max(hit.frame.height, 1)
+        var best: (KeyCapView, CGFloat)?
+        for k in keys {
+            guard case .char(let c) = k.kind, c.count == 1, let ch = c.lowercased().first, ch.isLetter,
+                  abs(k.frame.midY - p.y) < kh * 1.2, abs(k.frame.midX - p.x) < kw * 1.6 else { continue }
+            let off = model[ch] ?? .zero
+            let cx = k.frame.midX + off.x, cy = k.frame.midY + off.y
+            let d = hypot((p.x - cx) / kw, (p.y - cy) / (kh * 1.1))
+            if best == nil || d < best!.1 { best = (k, d) }
+        }
+        return best?.0 ?? hit
     }
 
     private func dist(_ r: CGRect, _ p: CGPoint) -> CGFloat {
@@ -514,6 +548,7 @@ final class KeysView: UIView {
     /// gewinnt der, der ein echtes Wort ergibt (wie bei der iOS-Tastatur).
     private func smartKey(at p: CGPoint) -> KeyCapView? {
         guard let primary = key(at: p) else { return nil }
+        if let space = spaceRescue(primary, p) { return space }
         guard config?.layer == .letters, let state, state.store.smartTouch,
               case .char(let pc) = primary.kind, pc.count == 1, pc.first?.isLetter == true,
               !state.currentWordIsEmpty else { return primary }
@@ -532,6 +567,17 @@ final class KeysView: UIView {
             if best == nil || d < best!.1 { best = (k, d) }
         }
         return best?.0 ?? primary
+    }
+
+    /// Schnelles Tippen: Wer am Wortende knapp über der Leertaste auf c/v/b/n/m landet, meint fast immer „Leer“.
+    private func spaceRescue(_ primary: KeyCapView, _ p: CGPoint) -> KeyCapView? {
+        guard config?.layer == .letters, let state, state.store.smartTouch,
+              case .char(let c) = primary.kind, "cvbnm".contains(c.lowercased()),
+              p.y > primary.frame.maxY - primary.frame.height * 0.24,
+              !state.currentWordIsEmpty, state.currentWordIsComplete, !state.isPlausibleContinuation(c),
+              let space = keys.first(where: { if case .space = $0.kind { return true }; return false }),
+              p.x >= space.frame.minX - 4, p.x <= space.frame.maxX + 4 else { return nil }
+        return space
     }
 
     override func touchesMoved(_ set: Set<UITouch>, with event: UIEvent?) {
@@ -640,7 +686,9 @@ final class KeysView: UIView {
         }
         if info.cursorMode { return }
         switch info.key.kind {
-        case .char(let c): state.tapKey(c)
+        case .char(let c):
+            state.pendingTapPoint = info.startPoint
+            state.tapKey(c)
         case .space: state.tapSpace()
         case .returnKey: state.tapReturn()
         case .numbers: state.setLayer(.numbers)

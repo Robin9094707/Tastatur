@@ -128,6 +128,10 @@ final class SharedStore: ObservableObject {
     /// Gesten-Tippen (Wischen) und KI-Hilfe dabei.
     @Published var swipeTyping: Bool = true { didSet { set(swipeTyping, "swipeTyping") } }
     @Published var swipeAI: Bool = true { didSet { set(swipeAI, "swipeAI") } }
+    /// Power-Tippen: persönliche Trefferzonen, Korrektur über Fingerpositionen, schnelle KI-Korrektur.
+    @Published var adaptiveTouch: Bool = true { didSet { set(adaptiveTouch, "adaptiveTouch") } }
+    @Published var tapCorrection: Bool = true { didSet { set(tapCorrection, "tapCorrection") } }
+    @Published var aiTypoTurbo: Bool = true { didSet { set(aiTypoTurbo, "aiTypoTurbo") } }
     @Published var liveAICorrection: Bool = true { didSet { set(liveAICorrection, "liveAICorrection") } }
 
     // Emojis
@@ -204,6 +208,9 @@ final class SharedStore: ObservableObject {
         upd(\.smartTouch, bool("smartTouch", true))
         upd(\.swipeTyping, bool("swipeTyping", true))
         upd(\.swipeAI, bool("swipeAI", true))
+        upd(\.adaptiveTouch, bool("adaptiveTouch", true))
+        upd(\.tapCorrection, bool("tapCorrection", true))
+        upd(\.aiTypoTurbo, bool("aiTypoTurbo", true))
         upd(\.aiSuggestMode, d.string(forKey: "aiSuggestMode") ?? "manual")
         upd(\.translateTarget, d.string(forKey: "translateTarget") ?? "Englisch")
         upd(\.translateDirect, d.object(forKey: "translateDirect") as? Bool ?? true)

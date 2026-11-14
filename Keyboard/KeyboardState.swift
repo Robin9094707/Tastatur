@@ -311,12 +311,14 @@ final class KeyboardState: ObservableObject {
 
     func disappear() {
         engine.save()
+        if touchModelUpdates > 0 { saveTouchModel() }
         clipTimer?.invalidate()
         clipTimer = nil
         stopDelete()
     }
 
     func textDidChange() {
+        if !wordTaps.isEmpty, wordTaps.count != currentWord.count { wordTaps = [] }
         updateReturnKey()
         if !composeMode {
             updateAutoShift()
@@ -513,7 +515,15 @@ final class KeyboardState: ObservableObject {
             return
         }
         undoCorrection = nil
+        let startsWord = currentWord.isEmpty
         proxy?.insertText(output)
+        if output.count == 1, output.first?.isLetter == true, layer == .letters {
+            if startsWord { wordTaps = [] }
+            wordTaps.append(pendingTapPoint ?? CGPoint(x: -9999, y: -9999))
+        } else {
+            wordTaps = []
+        }
+        pendingTapPoint = nil
         if shift == .on { shift = .off }
         if layer != .letters, output == "'" { layer = .letters }
         scheduleRefresh()
@@ -588,7 +598,7 @@ final class KeyboardState: ObservableObject {
                 afterCommit()
                 return
             }
-            if store.autocorrect, shouldAutocorrect, !looksLikeName(word), let corr = engine.correction(for: word), corr != word {
+            if store.autocorrect, shouldAutocorrect, !looksLikeName(word), let corr = smartCorrection(for: word), corr != word {
                 deleteChars(word.count)
                 proxy?.insertText(corr + trailing)
                 undoCorrection = (word, corr, trailing)
@@ -597,6 +607,7 @@ final class KeyboardState: ObservableObject {
                 afterCommit()
                 return
             }
+            learnTouches(for: word)
             engine.learn(word: word, previous: prev)
         }
         proxy?.insertText(trailing)
@@ -627,6 +638,7 @@ final class KeyboardState: ObservableObject {
     }
 
     private func afterCommit() {
+        wordTaps = []
         wordsSincePrediction += 1
         if !liveEditing {
             let end = before.last.map { ".!?\n".contains($0) } ?? false
@@ -636,7 +648,7 @@ final class KeyboardState: ObservableObject {
         if !liveEditing {
             wordsSinceCheck += 1
             let last = before.last
-            if wordsSinceCheck >= 8 || (last != nil && ".!?\n".contains(last!)) && wordsSinceCheck >= 1 {
+            if wordsSinceCheck >= (store.aiTypoTurbo ? 4 : 8) || (last != nil && ".!?\n".contains(last!)) && wordsSinceCheck >= 1 {
                 liveCheckPending = true
             }
         }
@@ -676,6 +688,7 @@ final class KeyboardState: ObservableObject {
         }
         undoCorrection = nil
         proxy?.deleteBackward()
+        if !wordTaps.isEmpty { wordTaps.removeLast() }
         updateAutoShift()
         scheduleRefresh()
     }
@@ -823,7 +836,7 @@ final class KeyboardState: ObservableObject {
                 list.append(Suggestion(text: macro.shortcut, kind: .macro, display: "⚡︎ " + macro.title))
             }
             var correction: String?
-            if store.autocorrect, shouldAutocorrect, !looksLikeName(word) { correction = engine.correction(for: word) }
+            if store.autocorrect, shouldAutocorrect, !looksLikeName(word) { correction = smartCorrection(for: word) }
             list.append(Suggestion(text: word, kind: .typed, display: "„\(word)“"))
             if let correction { list.append(Suggestion(text: correction, kind: .correction)) }
             for c in engine.completions(prefix: word, previousWord: previousWord, limit: 3) where !list.contains(where: { $0.text == c }) {
@@ -1735,7 +1748,7 @@ final class KeyboardState: ObservableObject {
         liveCheckWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.runLiveCheck() }
         liveCheckWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + (store.aiTypoTurbo ? 0.8 : 1.4), execute: work)
     }
 
     private func runLiveCheck() {
@@ -1758,7 +1771,7 @@ final class KeyboardState: ObservableObject {
         guard before == snapshot, panel == .none, !composeMode else { return }
         let words = Set(region.split { !($0.isLetter || $0.isNumber || $0 == "-") }.map(String.init))
         let safe = fixes.filter { f in
-            f.confidence >= 0.9 && !f.wrong.isEmpty && !f.right.isEmpty && f.wrong != f.right
+            f.confidence >= (store.aiTypoTurbo ? 0.85 : 0.9) && !f.wrong.isEmpty && !f.right.isEmpty && f.wrong != f.right
                 && !f.wrong.contains(" ") && !f.right.contains(" ")
                 && words.contains(f.wrong)
                 && !neverFix.contains(f.wrong.lowercased())
@@ -2465,6 +2478,87 @@ final class KeyboardState: ObservableObject {
         }
         aiKeepMarkdown = true
         aiAutoCopy = store.discordAutoCopy
+    }
+
+    // MARK: - Power-Tippen
+
+    struct KeyGeometry {
+        var centers: [Character: CGPoint]
+        var keyWidth: CGFloat
+        var rowHeight: CGFloat
+    }
+    var keyGeometry: KeyGeometry?
+    /// Punkt der zuletzt getippten Taste (vom Tastenfeld gesetzt).
+    var pendingTapPoint: CGPoint?
+    /// Fingerpositionen der Buchstaben im aktuellen Wort.
+    private var wordTaps: [CGPoint] = []
+    /// Gelernte persönliche Abweichung je Taste (wo du eine Taste wirklich triffst).
+    private(set) lazy var touchModel: [Character: CGPoint] = loadTouchModel()
+    private var touchModelUpdates = 0
+
+    private var wordTapsValid: Bool { wordTaps.allSatisfy { $0.x > -1000 } }
+
+    var currentWordIsComplete: Bool {
+        let w = currentWord
+        guard w.count >= 2 else { return false }
+        return engine.isKnown(w) || SwipeDecoder.shared.rank(of: w) != nil
+    }
+
+    /// Korrektur über die echten Fingerpositionen (stärker als reine Buchstaben-Ähnlichkeit),
+    /// sonst die klassische Autokorrektur.
+    func smartCorrection(for word: String) -> String? {
+        let lower = word.lowercased()
+        if store.tapCorrection, let geo = keyGeometry, wordTaps.count == word.count, word.count >= 2, wordTapsValid,
+           word.allSatisfy({ $0.isLetter }), !(word.count > 1 && word == word.uppercased()),
+           !engine.isKnown(word), SwipeDecoder.shared.rank(of: lower) == nil, !engine.spelledCorrectly(word) {
+            SwipeDecoder.shared.loadIfNeeded()
+            let prev = previousWord?.lowercased() ?? ""
+            let engine = self.engine
+            let ctx: (String) -> Double = prev.isEmpty ? { _ in 0 } : { w in Double(min(engine.bigramCount(prev, w), 8)) * 0.08 }
+            if let r = SwipeDecoder.shared.tapCorrect(typed: lower, taps: wordTaps, centers: geo.centers, kw: geo.keyWidth,
+                                                       learned: engine.swipeLearned(), context: ctx),
+               r.word != lower, r.spatial <= 2.2 + Double(word.count) * 0.15 {
+                let cased = word.first?.isUppercase == true ? engine.casedLike(word, r.word) : engine.swipeCased(r.word)
+                return cased
+            }
+        }
+        return engine.correction(for: word)
+    }
+
+    /// Merkt sich, wo du die Tasten eines richtig getippten Wortes getroffen hast.
+    private func learnTouches(for word: String) {
+        guard store.adaptiveTouch, let geo = keyGeometry, wordTaps.count == word.count, word.count >= 3, wordTapsValid,
+              engine.isKnown(word) || SwipeDecoder.shared.rank(of: word.lowercased()) != nil else { return }
+        let kw = geo.keyWidth, kh = geo.rowHeight
+        for (ch, tap) in zip(word.lowercased(), wordTaps) {
+            guard let c = geo.centers[SwipeDecoder.keyChar(ch)] else { continue }
+            let dx = tap.x - c.x, dy = tap.y - c.y
+            guard abs(dx) < kw * 0.6, abs(dy) < kh * 0.6 else { continue }
+            let old = touchModel[ch] ?? .zero
+            let nx = old.x * 0.93 + dx * 0.07, ny = old.y * 0.93 + dy * 0.07
+            touchModel[ch] = CGPoint(x: max(-kw * 0.3, min(kw * 0.3, nx)), y: max(-kh * 0.3, min(kh * 0.3, ny)))
+        }
+        touchModelUpdates += 1
+        if touchModelUpdates % 15 == 0 { saveTouchModel() }
+    }
+
+    private func loadTouchModel() -> [Character: CGPoint] {
+        guard let raw = store.defaults.dictionary(forKey: "touchModel") as? [String: [Double]] else { return [:] }
+        var out: [Character: CGPoint] = [:]
+        for (k, v) in raw where v.count == 2 { if let ch = k.first { out[ch] = CGPoint(x: v[0], y: v[1]) } }
+        return out
+    }
+
+    private func saveTouchModel() {
+        var raw: [String: [Double]] = [:]
+        for (k, v) in touchModel { raw[String(k)] = [Double(v.x), Double(v.y)] }
+        store.defaults.set(raw, forKey: "touchModel")
+    }
+
+    func resetTouchModel() {
+        touchModel = [:]
+        store.defaults.removeObject(forKey: "touchModel")
+        showToast("Trefferzonen zurückgesetzt")
     }
 
     // MARK: - Gesten-Tippen (Wischen)

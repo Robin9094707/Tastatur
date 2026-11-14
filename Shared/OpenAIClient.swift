@@ -300,14 +300,24 @@ final class OpenAIClient {
     // MARK: - Schlusskorrektur (ganzer Text)
 
     /// Korrigiert den ganzen Text minimal (Rechtschreibung, Grammatik, Wortwahl im Kontext) und liefert die Änderungen als Paare.
-    func finalCheck(text: String, after: String?) async throws -> [TypoFix] {
+    func finalCheck(text: String, after: String?, finished: Bool = false) async throws -> [TypoFix] {
         var user = "<text>\n\(text)\n</text>"
+        let punctuation = store.aiPunctuation
+            ? """
+            Satzzeichen vollständig und korrekt nach deutscher (bzw. der jeweiligen) Rechtschreibung ergänzen: fehlende Kommas (Nebensätze mit dass/weil/wenn/ob/als/der/die/das …, vor aber/sondern/doch, Aufzählungen, Einschübe, Anreden wie „Hallo Max,“, erweiterte Infinitive, Bestätigungen wie „Ja, …“), fehlende Punkte zwischen Sätzen, Fragezeichen bei Fragen, Ausrufezeichen nur bei klaren Ausrufen, Großschreibung am Satzanfang, Apostroph/Anführungszeichen. Falsche oder doppelte Satzzeichen entfernen.
+            Für ein fehlendes Satzzeichen: „falsch“ = das Wort davor (ggf. mit dem nächsten Wort), „richtig“ = mit Satzzeichen, z. B. {"falsch":"Hallo Max","richtig":"Hallo Max,"} oder {"falsch":"gekommen wir","richtig":"gekommen. Wir"}.
+            """ + (finished
+                ? "Der Text ist fertig: Auch der letzte Satz bekommt sein Satzzeichen (Punkt/Fragezeichen), außer der Text ist eine kurze Chat-Antwort aus 1–3 Wörtern."
+                : "Das ENDE des Textes nicht anfassen (der Nutzer schreibt evtl. noch weiter): kein Satzzeichen hinter das letzte Wort setzen.")
+            : "Kommas nur wenn eindeutig nötig.
         if let after, !after.isEmpty { user += "\n\nText danach (nur Kontext, nicht korrigieren):\n\(after)" }
         let raw = try await chat(messages: [
             ChatMessage(role: "system", content: """
             Du bist das Schlusslektorat einer Smartphone-Tastatur. Der Nutzer hat schnell getippt; lies den GANZEN Text und korrigiere ihn sauber, aber minimal:
-            Tippfehler, Rechtschreibung, Grammatik, Groß-/Kleinschreibung, falsche Wörter im Kontext (das/dass, seid/seit, wieder/wider, ihm/ihn …), fehlende Umlaute, offensichtlich vergessene oder doppelte Wörter, Kommas nur wenn eindeutig nötig.
-            NICHT ändern: Stil, Wortwahl, Umgangssprache, Satzbau, Emojis, Namen, Abkürzungen, absichtliche Schreibweisen\(store.activeApp?.markdown == true ? ", Markdown-Zeichen" : ""). Nichts ergänzen, nichts umformulieren.
+            Tippfehler, Rechtschreibung, Grammatik, Groß-/Kleinschreibung, falsche Wörter im Kontext (das/dass, seid/seit, wieder/wider, ihm/ihn …), fehlende Umlaute, offensichtlich vergessene oder doppelte Wörter.
+            \(punctuation)
+            NICHT ändern: Stil, Wortwahl, Umgangssprache, Satzbau, Emojis, Namen, Abkürzungen, absichtliche Schreibweisen\(store.activeApp?.markdown == true ? ", Markdown-Zeichen" : ""). Keine Wörter ergänzen (außer offensichtlich vergessene), nichts umformulieren.
+            Ziel: ein fehlerfreier Text mit perfekter Zeichensetzung – aber im Ton des Nutzers.
             Gib jede Änderung als Paar zurück: „falsch“ = EXAKTER Ausschnitt aus dem Text (1–4 Wörter, so kurz wie möglich, eindeutig), „richtig“ = Ersatz.
             Antworte NUR mit JSON: {"fixes":[{"falsch":"…","richtig":"…"}]} – bei fehlerfreiem Text {"fixes":[]}.
             """),

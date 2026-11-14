@@ -136,6 +136,9 @@ final class SharedStore: ObservableObject {
     /// KI-Korrektur: "end" = in Tipp-Pausen den ganzen Text, "word" = Wort für Wort beim Tippen, "off"
     @Published var aiCorrectMode: String = "end" { didSet { set(aiCorrectMode, "aiCorrectMode") } }
 
+    /// KI-Korrektur ergänzt fehlende Satzzeichen (Kommas, Punkte, Fragezeichen …) nach deutscher Rechtschreibung.
+    @Published var aiPunctuation: Bool = true { didSet { set(aiPunctuation, "aiPunctuation") } }
+
     // Wie bei der iOS-Tastatur
     /// Umlaut-Tasten ausblenden (ä/ö/ü dann per Gedrückthalten auf a/o/u).
     @Published var hideUmlauts: Bool = false { didSet { set(hideUmlauts, "hideUmlauts") } }
@@ -247,6 +250,7 @@ final class SharedStore: ObservableObject {
         upd(\.toolbarItems, getCodable("toolbarItems") ?? ToolItem.defaultOrder)
         upd(\.liveAICorrection, bool("liveAICorrection", true))
         upd(\.aiCorrectMode, d.string(forKey: "aiCorrectMode") ?? "end")
+        upd(\.aiPunctuation, bool("aiPunctuation", true))
         upd(\.hideUmlauts, bool("hideUmlauts", false))
         upd(\.capsLockEnabled, bool("capsLockEnabled", true))
         upd(\.smartPunctuation, bool("smartPunctuation", true))

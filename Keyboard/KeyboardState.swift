@@ -2272,7 +2272,7 @@ final class KeyboardState: ObservableObject {
         if manual { showToast("KI liest deinen Text …") }
         endCheckTask = Task { [weak self] in
             guard let self else { return }
-            let fixes = (try? await self.client.finalCheck(text: text, after: afterContext)) ?? []
+            let fixes = (try? await self.client.finalCheck(text: text, after: afterContext, finished: manual)) ?? []
             await MainActor.run {
                 self.bar.checking = false
                 guard !Task.isCancelled else { return }

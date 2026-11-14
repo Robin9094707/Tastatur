@@ -973,9 +973,10 @@ struct KeyboardSettingsPanel: View {
                 chip("Wenn ich fertig bin ✓", selected: store.aiCorrectMode != "off") { store.aiCorrectMode = "end" }
                 chip("Nur manuell", selected: store.aiCorrectMode == "off") { store.aiCorrectMode = "off" }
             }
-            Text(store.aiCorrectMode != "off" ? "Beim Tippen prüft die KI nichts. Wenn du fertig bist (kurze Pause), liest sie den ganzen Text und bietet die Korrekturen an – ein Tipp übernimmt alle." : "Die KI prüft nur, wenn du in der Schnellleiste auf „Korrigieren“ tippst.")
+            Text((store.aiCorrectMode != "off" ? "Beim Tippen prüft die KI nichts. Wenn du fertig bist (kurze Pause), liest sie den ganzen Text und bietet die Korrekturen an – ein Tipp übernimmt alle." : "Die KI prüft nur, wenn du in der Schnellleiste auf „Korrigieren“ tippst.") + (store.aiPunctuation ? " Fehlende Kommas, Punkte und Fragezeichen werden mit vorgeschlagen – beim Tippen ohne das Satzende, beim „Korrigieren“ inklusive." : ""))
                 .font(.caption2).foregroundStyle(.secondary)
             grid {
+                toggle("Satzzeichen ergänzen", "textformat.characters", $store.aiPunctuation)
                 toggle("Live-Antwort", "text.cursor", $store.streamResponses)
                 toggle("Umfeld senden", "text.viewfinder", $store.useAppContext)
             }
